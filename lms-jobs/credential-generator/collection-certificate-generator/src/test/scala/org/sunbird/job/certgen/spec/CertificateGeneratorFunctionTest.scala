@@ -125,12 +125,15 @@ class CertificateGeneratorFunctionTest extends BaseTestSpec {
   "Certificate generation with valid event " should " not throw exception " in {
     val event = new Event(JSONUtil.deserialize[java.util.Map[String, Any]](EventFixture.EVENT_3), 0, 0)
     val createCertReq = generateRequest(event,"1-25a8c96b-b254-4720-bbc9-29b37c3c2bec")
-    val batchId = event.related.getOrElse(jobConfig.COURSE_ID, "").asInstanceOf[String]
-    val courseId = event.related.getOrElse(jobConfig.BATCH_ID, "").asInstanceOf[String]
+    val courseId = event.related.getOrElse(jobConfig.COURSE_ID, "").asInstanceOf[String]
+    val batchId = event.related.getOrElse(jobConfig.BATCH_ID, "").asInstanceOf[String]
     val req = Map("filters" -> Map())
     when(mockHttpUtil.post(jobConfig.rcBaseUrl + "/PublicKey/search", ScalaModuleJsonUtils.serialize(req))).thenReturn(HTTPResponse(200, """[{"osUpdatedAt":"2022-03-17T06:43:48.070698Z","osCreatedAt":"2022-03-17T06:43:48.070698Z","osUpdatedBy":"anonymous","osCreatedBy":"anonymous","osid":"1-25a8c96b-b254-4720-bbc9-29b37c3c2bec","value":"keyvalue","alg":"RSA"}]"""))
     when(mockHttpUtil.post(jobConfig.rcBaseUrl + "/" + jobConfig.rcEntity, ScalaModuleJsonUtils.serialize(createCertReq), headers)).thenReturn(HTTPResponse(200, """{"id":"sunbird-rc.registry.create","ver":"1.0","ets":1646765130993,"params":{"resmsgid":"","msgid":"cca2e242-fce7-47ec-b5d0-61cebe56c31d","err":"","status":"SUCCESSFUL","errmsg":""},"responseCode":"OK","result":{"TrainingCertificate":{"osid":"validId"}}}"""))
     when(mockCassandraUtil.find("SELECT * FROM sunbird_courses.user_enrolments WHERE userid='"+event.userId+"' AND batchid='"+batchId+"' AND courseid='"+courseId+"';")).thenReturn(new util.ArrayList[Row]())
+    val learnerProfileRequestBody = s"""{\n                       |    \"request\": {\n                       |        \"filters\": {\n                       |            \"primaryCategory\": \"Learner Profile\",\n                       |            \"children\": [\"do_11309999837886054415\"],\n                       |            \"status\": [\"Live\"]\n                       |        },\n                       |        \"sort_by\": {\n                       |            \"lastPublishedOn\": \"desc\"\n                       |        },\n                       |        \"fields\": [\"name\"]\n                       |    }\n                       |}""".stripMargin
+    val learnerProfileResponse = """{"id":"api.search-service.search","ver":"3.0","ts":"2025-06-19T06:08:21ZZ","params":{"resmsgid":"7e161855-7e3b-4c8e-8644-a9eadd79f6c2","msgid":null,"err":null,"status":"successful","errmsg":null},"responseCode":"OK","result":{"count":0,"content":[{"identifier":"do_11309999837886054415","name":"Test Learner","objectType":"Content"}]}}"""
+    when(mockHttpUtil.post(jobConfig.searchBaseUrl + jobConfig.searchApi, learnerProfileRequestBody)).thenReturn(HTTPResponse(200, learnerProfileResponse))
     noException should be thrownBy new CertificateGeneratorFunction(jobConfig, mockHttpUtil, storageService, mockCassandraUtil).generateCertificateUsingRC(event, null)(mockMetrics)
 
   }
@@ -144,7 +147,7 @@ class CertificateGeneratorFunctionTest extends BaseTestSpec {
       "certificateLabel" -> certModel.certificateName,
       "status" -> "ACTIVE",
       "templateUrl" -> event.svgTemplate,
-      "training" -> Training(related.getOrElse(jobConfig.COURSE_ID, "").asInstanceOf[String], event.courseName, "Course", related.getOrElse(jobConfig.BATCH_ID, "").asInstanceOf[String]),
+      "training" -> Training(related.getOrElse(jobConfig.COURSE_ID, "").asInstanceOf[String], event.courseName, "Course", related.getOrElse(jobConfig.BATCH_ID, "").asInstanceOf[String], Option.apply("Test Learner")),
       "recipient" -> Recipient(certModel.identifier, certModel.recipientName, null),
       "issuer" -> Issuer(certModel.issuer.url, certModel.issuer.name, kid),
       "signatory" -> event.signatoryList,
