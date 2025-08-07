@@ -147,7 +147,7 @@ class CertificateGeneratorFunctionTest extends BaseTestSpec {
       "certificateLabel" -> certModel.certificateName,
       "status" -> "ACTIVE",
       "templateUrl" -> event.svgTemplate,
-      "training" -> Training(related.getOrElse(jobConfig.COURSE_ID, "").asInstanceOf[String], event.courseName, "Course", related.getOrElse(jobConfig.BATCH_ID, "").asInstanceOf[String], Option.apply("Test Learner")),
+      "training" -> Training(related.getOrElse(jobConfig.COURSE_ID, "").asInstanceOf[String], event.courseName, "Course", related.getOrElse(jobConfig.BATCH_ID, "").asInstanceOf[String], Option.apply("Test Learner"),""),
       "recipient" -> Recipient(certModel.identifier, certModel.recipientName, null),
       "issuer" -> Issuer(certModel.issuer.url, certModel.issuer.name, kid),
       "signatory" -> event.signatoryList,
