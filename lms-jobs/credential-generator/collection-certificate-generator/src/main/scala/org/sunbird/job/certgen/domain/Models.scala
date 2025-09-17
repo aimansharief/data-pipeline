@@ -62,5 +62,5 @@ case class UserEnrollmentData(batchId: String,
 }
 
 case class Recipient(id: String, name: String, `type`: String)
-case class Training(id: String, name: String, `type`: String, batchId: String)
+case class Training(id: String, name: String, `type`: String, batchId: String, group: Option[String] = None, completedOn: String)
 case class Issuer(url: String, name: String, kid: String)

@@ -87,6 +87,10 @@ class CertificateGeneratorConfig(override val config: Config) extends BaseJobCon
   val rcCreateApi: String = "service.rc.create.api"
   val rcDeleteApi: String = "service.rc.delete.api"
   val rcSearchApi: String = "service.rc.search.api"
+  val searchBaseUrl: String = config.getString("service.search.basePath")
+  val searchApi: String = "/v3/search"
+  val lmsBaseUrl: String = config.getString("service.lms.basePath")
+  val batchSearchApi: String = "/v1/course/batch/search"
 
 
   //constant
@@ -108,6 +112,7 @@ class CertificateGeneratorConfig(override val config: Config) extends BaseJobCon
   val COURSE_ID: String = "courseId"
   val TEMPLATE_ID: String = "templateId"
   val USER_ID: String = "userId"
+  val ISSUED_DATE: String = "issuedDate"
 
 
   val courseId = "courseId"

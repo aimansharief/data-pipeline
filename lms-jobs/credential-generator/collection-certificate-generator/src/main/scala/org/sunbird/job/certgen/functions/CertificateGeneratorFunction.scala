@@ -2,6 +2,7 @@ package org.sunbird.job.certgen.functions
 
 import com.datastax.driver.core.querybuilder.{QueryBuilder, Update}
 import com.datastax.driver.core.{Row, TypeTokens}
+import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kong.unirest.UnirestException
 import org.apache.commons.io.FileUtils
@@ -40,6 +41,7 @@ class CertificateGeneratorFunction(config: CertificateGeneratorConfig, httpUtil:
   implicit val certificateConfig: CertificateConfig = CertificateConfig(basePath = config.basePath, encryptionServiceUrl = config.encServiceUrl, contextUrl = config.CONTEXT, issuerUrl = config.ISSUER_URL,
     evidenceUrl = config.EVIDENCE_URL, signatoryExtension = config.SIGNATORY_EXTENSION)
   implicit var esUtil: ElasticSearchUtil = null
+  lazy private val gson = new Gson()
 
   override def open(parameters: Configuration): Unit = {
     super.open(parameters)
@@ -184,6 +186,114 @@ class CertificateGeneratorFunction(config: CertificateGeneratorConfig, httpUtil:
     }
   }
 
+  @throws[ServerException]
+  def getLearnerProfile(courseId: String, batchId: String): String = {
+    val courseCode = getCourseCode(courseId)
+    getLearnerProfileFromBatchOrCourse(batchId, courseCode, courseId)
+  }
+
+  private def getCourseCode(courseId: String): String = {
+    val requestBody = s"""{
+                         |    "request": {
+                         |        "filters": {
+                         |            "identifier": "$courseId",
+                         |            "status": ["Live"]
+                         |        },
+                         |        "fields": ["code"]
+                         |    }
+                         |}""".stripMargin
+    val response = httpUtil.post(config.searchBaseUrl + config.searchApi, requestBody)
+    if (response.status == 200) {
+      val responseBody = gson.fromJson(response.body, classOf[java.util.Map[String, AnyRef]])
+      val result = responseBody.getOrDefault("result", new java.util.HashMap[String, AnyRef]()).asInstanceOf[java.util.Map[String, AnyRef]]
+      val count = result.getOrDefault("count", 0.asInstanceOf[Number]).asInstanceOf[Number].intValue()
+      if (count > 0) {
+        val list = result.getOrDefault("content", new java.util.ArrayList[java.util.Map[String, AnyRef]]()).asInstanceOf[java.util.List[java.util.Map[String, AnyRef]]]
+        val courseCode = list.asScala.head.get("code").asInstanceOf[String]
+        logger.info(s"Course Code : $courseCode for Course ID: $courseId")
+        courseCode
+      } else {
+        logger.info(s"No Course Code found for Course ID: $courseId, proceeding without Course Code")
+        ""
+      }
+    } else {
+      logger.info("search-service error: " + response.body)
+      throw new Exception("Something Went Wrong While Making API Call | Status is: " + response.status + " :: " + response.body)
+    }
+  }
+  private def getLearnerProfileFromCourse(courseId: String): String = {
+    val requestBody = s"""{
+                       |    "request": {
+                       |        "filters": {
+                       |            "primaryCategory": "Learner Profile",
+                       |            "children": ["$courseId"],
+                       |            "status": ["Live"]
+                       |        },
+                       |        "sort_by": {
+                       |            "lastPublishedOn": "desc"
+                       |        },
+                       |        "fields": ["name"]
+                       |    }
+                       |}""".stripMargin
+    val response = httpUtil.post(config.searchBaseUrl + config.searchApi, requestBody)
+    if (response.status == 200) {
+      val responseBody = gson.fromJson(response.body, classOf[java.util.Map[String, AnyRef]])
+      val result = responseBody.getOrDefault("result", new java.util.HashMap[String, AnyRef]()).asInstanceOf[java.util.Map[String, AnyRef]]
+      val count = result.getOrDefault("count", 0.asInstanceOf[Number]).asInstanceOf[Number].intValue()
+      if (count > 0) {
+        val list = result.getOrDefault("content", new java.util.ArrayList[java.util.Map[String, AnyRef]]()).asInstanceOf[java.util.List[java.util.Map[String, AnyRef]]]
+        val learnerProfile = list.asScala.head.get("name").asInstanceOf[String]
+        logger.info("Learner Profile : "+learnerProfile)
+        learnerProfile
+      } else {
+        logger.info(s"No learner profile found for course ID: $courseId, proceeding without learner profile")
+        ""
+      }
+    } else {
+      logger.info("search-service error: " + response.body)
+      throw new Exception("Something Went Wrong While Making API Call | Status is: " + response.status + " :: " + response.body)
+    }
+  }
+
+  private def getLearnerProfileFromBatchOrCourse(batchId: String, courseCode: String, courseId: String): String = {
+    val requestBody = s"""{
+                          |    "request": {
+                          |        "filters": {
+                          |            "identifier": ["$batchId"],
+                          |            "status": [0,1]
+                          |        },
+                          |        "fields": ["name"]
+                          |    }
+                          |}""".stripMargin
+    val response = httpUtil.post(config.lmsBaseUrl + config.batchSearchApi, requestBody)
+    if (response.status == 200) {
+      val responseBody = gson.fromJson(response.body, classOf[java.util.Map[String, AnyRef]])
+      val result = responseBody.getOrDefault("result", new java.util.HashMap[String, AnyRef]()).asInstanceOf[java.util.Map[String, AnyRef]]
+      val responseMap = result.getOrDefault("response", new java.util.HashMap[String, AnyRef]()).asInstanceOf[java.util.Map[String, AnyRef]]
+      val count = responseMap.getOrDefault("count", 0.asInstanceOf[Number]).asInstanceOf[Number].intValue().asInstanceOf[Integer]
+      logger.info(s"Batch search result: $responseMap, count: $count" + "count class type : "+count.getClass)
+      if (count > 0) {
+        val list = responseMap.getOrDefault("content", new java.util.ArrayList[java.util.Map[String, AnyRef]]()).asInstanceOf[java.util.List[java.util.Map[String, AnyRef]]]
+        val batchName = list.asScala.head.get("name").asInstanceOf[String]
+        logger.info(s"Fetched batchName: '$batchName' for batchId: '$batchId', courseId: '$courseId', response: $responseBody")
+        val learnerProfileCode = if (courseCode.nonEmpty && batchName.startsWith(courseCode + "_")) {
+            batchName.substring(courseCode.length + 1)
+          }
+          else {
+            getLearnerProfileFromCourse(courseId)
+          }
+        logger.info("Learner Profile Code: " + learnerProfileCode)
+        learnerProfileCode
+      } else {
+        logger.info(s"No learner profile found for batch ID: $batchId, proceeding without learner profile")
+        ""
+      }
+    } else {
+      logger.info("search-service error: " + response.body)
+      throw new Exception("Something Went Wrong While Making API Call | Status is: " + response.status + " :: " + response.body)
+    }
+  }
+
   @throws[IOException]
   private def encodeQrCode(file: File): String = {
     val fileContent = FileUtils.readFileToByteArray(file)
@@ -201,6 +311,8 @@ class CertificateGeneratorFunction(config: CertificateGeneratorConfig, httpUtil:
 
   def generateRequest(event: Event, certModel: CertModel, reIssue: Boolean):  Map[String, AnyRef] = {
     val req = Map("filters" -> Map())
+    val batchId = event.related.getOrElse(config.BATCH_ID, "").asInstanceOf[String]
+    val courseId = event.related.getOrElse(config.COURSE_ID, "").asInstanceOf[String]
     val publicKeyId: String = callCertificateRc(config.rcSearchApi, null, req)
     val replacedUrl = if(event.svgTemplate.contains(config.cloudStoreBasePathPlaceholder)) event.svgTemplate.replace(config.cloudStoreBasePathPlaceholder, config.baseUrl+"/"+config.contentCloudStorageContainer) else event.svgTemplate
     logger.info("generateRequest: template url from event {}", event.svgTemplate)
@@ -209,7 +321,7 @@ class CertificateGeneratorFunction(config: CertificateGeneratorConfig, httpUtil:
       "certificateLabel" -> certModel.certificateName,
       "status" -> "ACTIVE",
       "templateUrl" -> replacedUrl,
-      "training" -> Training(event.related.getOrElse(config.COURSE_ID, "").asInstanceOf[String], event.courseName, "Course", event.related.getOrElse(config.BATCH_ID, "").asInstanceOf[String]),
+      "training" -> Training(courseId, event.courseName, "Course", batchId, Option.apply(getLearnerProfile(courseId, batchId)), event.issuedDate),
       "recipient" -> Recipient(certModel.identifier, certModel.recipientName, null),
       "issuer" -> Issuer(certModel.issuer.url, certModel.issuer.name, publicKeyId),
       "signatory" -> event.signatoryList,
