@@ -1,18 +1,17 @@
 package org.sunbird.job.cf
 
-import java.util
-import java.util.UUID
-
-import scala.collection.JavaConverters._
 import org.sunbird.job.cf.domain.Event
+
+import java.util
+import scala.collection.JavaConverters._
 
 object EventFixture {
 
   // Sample batch update event as JSON string
-  val BATCH_UPDATE_EVENT: String = """{"eid":"BE_JOB_REQUEST","ets":1726656000000,"mid":"LP.12345678-1234-1234-1234-123456789012","ver":"3.0","batchId":"batch-001","userId":"user-123","courseId":"course-456","edata":{"action":"batch-update","batchId":"batch-001","userId":"user-123","courseId":"course-456","status":2,"progress":100}}"""
+  val BATCH_UPDATE_EVENT: String = """{"eid":"BE_JOB_REQUEST","ets":1726656000000,"mid":"LP.12345678-1234-1234-1234-123456789012","ver":"3.0","batchId":"batch-001","userId":"user-123","activityType":"CF", "activityId":"cf-456","edata":{"action":"batch-update","batchId":"batch-001","userId":"user-123","activityType":"CF", "activityId":"cf-456","status":2,"progress":100}}"""
 
   // Sample user enrollment event as JSON string
-  val USER_ENROLLMENT_EVENT: String = """{"eid":"BE_JOB_REQUEST","ets":1726656000001,"mid":"LP.87654321-4321-4321-4321-210987654321","ver":"3.0","batchId":"batch-002","userId":"user-456","courseId":"course-789","edata":{"action":"user-enrollment","batchId":"batch-002","userId":"user-456","courseId":"course-789","enrollmentDate":"2025-09-17","enrollmentStatus":"active"}}"""
+  val USER_ENROLLMENT_EVENT: String = """{"eid":"BE_JOB_REQUEST","ets":1726656000001,"mid":"LP.87654321-4321-4321-4321-210987654321","ver":"3.0","batchId":"batch-002","userId":"user-456","activityType":"CF", "activityId":"cf-789","edata":{"action":"user-enrollment","batchId":"batch-002","userId":"user-456","activityType":"CF", "activityId":"cf-789","enrollmentDate":"2025-09-17","enrollmentStatus":"active"}}"""
 
   // Sample event with invalid action as JSON string
   val INVALID_EVENT: String =
@@ -41,7 +40,7 @@ object EventFixture {
       eData.put("action", "batch-update")
       eData.put("batchId", "batch-001")
       eData.put("userId", "user-123")
-      eData.put("courseId", "course-456")
+      eData.put("activityId", "cf-456")
       eData.put("status", Integer.valueOf(2))
       eData.put("progress", Integer.valueOf(100))
 
@@ -51,14 +50,16 @@ object EventFixture {
       map.put("ver", "3.0")
       map.put("batchId", "batch-001")
       map.put("userId", "user-123")
-      map.put("courseId", "course-456")
+      map.put("activityId", "cf-456")
+      map.put("activityType", "CF")
       map.put("edata", eData)
     } else if (jsonString.contains("user-enrollment")) {
       val eData = new java.util.HashMap[String, AnyRef]()
       eData.put("action", "user-enrollment")
       eData.put("batchId", "batch-002")
       eData.put("userId", "user-456")
-      eData.put("courseId", "course-789")
+      eData.put("activityId", "cf-789")
+      eData.put("activityType", "CF")
       eData.put("enrollmentDate", "2025-09-17")
       eData.put("enrollmentStatus", "active")
 
@@ -68,7 +69,8 @@ object EventFixture {
       map.put("ver", "3.0")
       map.put("batchId", "batch-002")
       map.put("userId", "user-456")
-      map.put("courseId", "course-789")
+      map.put("activityId", "cf-789")
+      map.put("activityType", "CF")
       map.put("edata", eData)
     } else if (jsonString.contains("invalid-action")) {
       val eData = new java.util.HashMap[String, AnyRef]()

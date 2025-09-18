@@ -1,10 +1,6 @@
 package org.sunbird.job.cf.domain
 
-import java.util
-
 import org.sunbird.job.domain.reader.JobRequest
-
-import scala.collection.JavaConverters
 
 class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) extends JobRequest(eventMap, partition, offset) {
 
@@ -20,7 +16,9 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
 
   def userId: String = readOrDefault[String]("userId", "")
 
-  def courseId: String = readOrDefault[String]("courseId", "")
+  def activityId: String = readOrDefault[String]("activityId", "")
+
+  def activityType: String = readOrDefault[String]("activityType", "")
 
   def status: Int = readOrDefault[Int]("edata.status", 0)
 
@@ -38,15 +36,9 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
 
   def related: Map[String, AnyRef] = readOrDefault[Map[String, AnyRef]]("edata.related", Map[String, AnyRef]())
 
-  // Standard fields for tests (parity with dp-core Events)
-  def eid(): String = readOrDefault[String]("eid", "")
 
-  def ets(): Long = {
-    val v = read[Any]("ets").orNull
-    v match {
-      case n: java.lang.Number => n.longValue()
-      case _ => 0L
-    }
+  def isValidEvent(): Boolean = {
+    this.eData.nonEmpty && this.action.nonEmpty && this.activityId.nonEmpty && this.activityType.nonEmpty
   }
 
   def version(): String = readOrDefault[String]("ver", "")

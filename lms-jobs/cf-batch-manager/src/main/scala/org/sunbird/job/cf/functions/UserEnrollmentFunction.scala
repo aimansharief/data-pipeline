@@ -34,7 +34,7 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)(implicit mapTypeInfo:
   override def processElement(event: Event,
                               context: ProcessFunction[Event, Event]#Context,
                               metrics: Metrics): Unit = {
-    logger.info(s"User enrollment received: mid=${event.mid()} batchId=${event.batchId} userId=${event.userId} courseId=${event.courseId}")
+    logger.info(s"User enrollment received: mid=${event.mid()} batchId=${event.batchId} userId=${event.userId} activityId=${event.activityId} activityType=${event.activityType}")
     metrics.incCounter(config.totalEventCount)
 
     try {
