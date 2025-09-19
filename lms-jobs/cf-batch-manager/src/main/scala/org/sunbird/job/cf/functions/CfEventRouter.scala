@@ -30,7 +30,7 @@ class CfEventRouter(config: CfBatchManagerConfig)
   override def processElement(event: Event,
                               context: ProcessFunction[Event, Event]#Context,
                               metrics: Metrics): Unit = {
-    logger.info(s"Routing event: mid=${event.mid()} action=${event.action} batchId=${event.batchId} userId=${event.userId}")
+    logger.info(s"Routing event: mid=${event.mid()} action=${event.action} batchId=${event.batchId}")
     metrics.incCounter(config.totalEventCount)
 
     try {
@@ -38,21 +38,21 @@ class CfEventRouter(config: CfBatchManagerConfig)
       // TODO: Add validation for each after it matches the action
       action match {
         case config.batchUpdateAction =>
-          logger.info(s"Routing to batchUpdate: batchId=${event.batchId} userId=${event.userId}")
+          logger.info(s"Routing to batchUpdate: batchId=${event.batchId}")
           context.output(config.batchUpdateOutputTag, event)
         case config.userEnrollmentAction =>
-          logger.info(s"Routing to userEnrollment: batchId=${event.batchId} userId=${event.userId}")
+          logger.info(s"Routing to userEnrollment: batchId=${event.batchId}")
           context.output(config.userEnrollmentOutputTag, event)
         case _ =>
-          logger.error(s"Unsupported action for mid=${event.mid()} batchId=${event.batchId} userId=${event.userId}")
+          logger.error(s"Unsupported action for mid=${event.mid()} batchId=${event.batchId}")
           metrics.incCounter(config.failedEventCount)
       }
       metrics.incCounter(config.processedEventCount)
     } catch {
       case e: Exception =>
-        logger.error(s"Error routing event mid=${event.mid()} batchId=${event.batchId} userId=${event.userId}", e)
+        logger.error(s"Error routing event mid=${event.mid()} batchId=${event.batchId}", e)
         metrics.incCounter(config.failedEventCount)
-        val errorMap = Map("batchId" -> event.batchId, "userId" -> event.userId)
+        val errorMap = Map("batchId" -> event.batchId)
         throw new InvalidEventException(e.getMessage, errorMap, e)
     }
   }

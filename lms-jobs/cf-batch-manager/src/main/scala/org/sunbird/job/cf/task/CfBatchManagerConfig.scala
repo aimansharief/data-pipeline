@@ -48,7 +48,7 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   val action = "action"
   val batchUpdaterFn = "batch-updater-fn"
   val batchUpdateAction = "batch-create"
-  val userEnrollmentAction = "user-enrollment"
+  val userEnrollmentAction = "activity-enroll"
 
   // Consumers
   val cfBatchManagerConsumer = "cf-batch-manager-consumer"

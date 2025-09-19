@@ -12,7 +12,7 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
 
   def batchId: String = readOrDefault[String]("edata.batchId", "")
 
-  def userId: String = readOrDefault[String]("edata.userId", "")
+  def userIds: List[String] = readOrDefault[List[String]]("edata.userIds", List.empty[String])
 
   def activityId: String = readOrDefault[String]("edata.activityId", "")
 

@@ -45,7 +45,7 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
     val activityId = event.activityId
     val activityType = event.activityType
     val cfBatchId = event.batchId
-    logger.info(s"BatchUpdaterFunction :: Batch update received event: $event + activityId = $activityId  activityType = $activityType")
+    logger.info(s"BatchUpdaterFunction :: Batch update received event: $event activityId = $activityId  activityType = $activityType")
     metrics.incCounter(config.totalEventCount)
     try {
       if (activityId.nonEmpty && activityType == "CF") {
