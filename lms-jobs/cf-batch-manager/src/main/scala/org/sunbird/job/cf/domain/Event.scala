@@ -6,19 +6,17 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
 
   private val jobName = "CfBatchManager"
 
-  import scala.collection.JavaConverters._
-
   def action: String = readOrDefault[String]("edata.action", "")
 
   def eData: Map[String, AnyRef] = readOrDefault[Map[String, AnyRef]]("edata", Map[String, AnyRef]())
 
-  def batchId: String = readOrDefault[String]("batchId", "")
+  def batchId: String = readOrDefault[String]("edata.batchId", "")
 
-  def userId: String = readOrDefault[String]("userId", "")
+  def userId: String = readOrDefault[String]("edata.userId", "")
 
-  def activityId: String = readOrDefault[String]("activityId", "")
+  def activityId: String = readOrDefault[String]("edata.activityId", "")
 
-  def activityType: String = readOrDefault[String]("activityType", "")
+  def activityType: String = readOrDefault[String]("edata.activityType", "")
 
   def status: Int = readOrDefault[Int]("edata.status", 0)
 
@@ -36,8 +34,22 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
 
   def related: Map[String, AnyRef] = readOrDefault[Map[String, AnyRef]]("edata.related", Map[String, AnyRef]())
 
+  def name: String = readOrDefault[String]("edata.name", "")
 
-  def isValidEvent(): Boolean = {
+  def description: String = readOrDefault[String]("edata.description", "")
+
+  def startDate: String = readOrDefault[String]("edata.startDate", "")
+
+  def endDate: String = readOrDefault[String]("edata.endDate", "")
+
+  def enrollmentEndDate: String = readOrDefault[String]("edata.enrollmentEndDate", "")
+
+  def createdBy: String = readOrDefault[String]("edata.createdBy", "system")
+
+  def createdFor: List[String] = readOrDefault[List[String]]("edata.createdFor", List.empty[String])
+
+
+  def isValidEvent: Boolean = {
     this.eData.nonEmpty && this.action.nonEmpty && this.activityId.nonEmpty && this.activityType.nonEmpty
   }
 

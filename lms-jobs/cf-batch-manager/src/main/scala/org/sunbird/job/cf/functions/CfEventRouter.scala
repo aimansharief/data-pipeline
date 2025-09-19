@@ -1,6 +1,5 @@
 package org.sunbird.job.cf.functions
 
-import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.configuration.Configuration
 import org.apache.flink.streaming.api.functions.ProcessFunction
 import org.slf4j.LoggerFactory
@@ -9,10 +8,7 @@ import org.sunbird.job.cf.task.CfBatchManagerConfig
 import org.sunbird.job.exception.InvalidEventException
 import org.sunbird.job.{BaseProcessFunction, Metrics}
 
-import java.util
-import scala.collection.JavaConverters._
-
-class CfEventRouter(config: CfBatchManagerConfig)(implicit mapTypeInfo: TypeInformation[util.Map[String, AnyRef]])
+class CfEventRouter(config: CfBatchManagerConfig)
   extends BaseProcessFunction[Event, Event](config) {
 
   private[this] val logger = LoggerFactory.getLogger(classOf[CfEventRouter])
@@ -39,6 +35,7 @@ class CfEventRouter(config: CfBatchManagerConfig)(implicit mapTypeInfo: TypeInfo
 
     try {
       val action = event.action
+      // TODO: Add validation for each after it matches the action
       action match {
         case config.batchUpdateAction =>
           logger.info(s"Routing to batchUpdate: batchId=${event.batchId} userId=${event.userId}")

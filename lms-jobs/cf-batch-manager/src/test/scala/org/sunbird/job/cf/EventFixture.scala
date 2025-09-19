@@ -2,7 +2,6 @@ package org.sunbird.job.cf
 
 import org.sunbird.job.cf.domain.Event
 
-import java.util
 import scala.collection.JavaConverters._
 
 object EventFixture {
@@ -91,8 +90,8 @@ object EventFixture {
   }
 
   // Convert map to Event object with correct type parameters
-  def mapToEvent(eventMap: util.Map[String, AnyRef]): org.sunbird.job.cf.domain.Event = {
-    new org.sunbird.job.cf.domain.Event(eventMap.asInstanceOf[util.Map[String, Any]], 0, 0L)
+  def mapToEvent(eventMap: java.util.Map[String, AnyRef]): Event = {
+    new Event(eventMap.asInstanceOf[java.util.Map[String, Any]], 0, 0L)
   }
 
 }

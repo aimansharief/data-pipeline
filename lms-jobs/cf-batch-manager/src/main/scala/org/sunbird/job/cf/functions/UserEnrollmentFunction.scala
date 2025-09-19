@@ -1,6 +1,5 @@
 package org.sunbird.job.cf.functions
 
-import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.configuration.Configuration
 import org.apache.flink.streaming.api.functions.ProcessFunction
 import org.slf4j.LoggerFactory
@@ -9,10 +8,9 @@ import org.sunbird.job.cf.task.CfBatchManagerConfig
 import org.sunbird.job.exception.InvalidEventException
 import org.sunbird.job.{BaseProcessFunction, Metrics}
 
-import java.util
 import scala.collection.JavaConverters._
 
-class UserEnrollmentFunction(config: CfBatchManagerConfig)(implicit mapTypeInfo: TypeInformation[util.Map[String, AnyRef]])
+class UserEnrollmentFunction(config: CfBatchManagerConfig)
   extends BaseProcessFunction[Event, Event](config) {
 
   private[this] val logger = LoggerFactory.getLogger(classOf[UserEnrollmentFunction])
@@ -50,10 +48,9 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)(implicit mapTypeInfo:
       metrics.incCounter(config.processedEventCount)
     } catch {
       case e: Exception =>
-        logger.error(s"User enrollment failed: mid=${event.mid()} batchId=${event.batchId} userId=${event.userId}", e)
+        logger.error(s"User Enrollment Failed: mid=${event.mid()} batchId=${event.batchId} userId=${event.userId}", e)
         metrics.incCounter(config.failedEventCount)
-        val errorMap = Map("batchId" -> event.batchId, "userId" -> event.userId)
-        throw new InvalidEventException(e.getMessage, errorMap, e)
+        throw new InvalidEventException(e.getMessage, Map("partition" -> event.partition, "offset" -> event.offset), e)
     }
   }
 }

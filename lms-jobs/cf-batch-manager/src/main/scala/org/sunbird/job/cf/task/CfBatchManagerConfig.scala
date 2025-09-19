@@ -47,7 +47,7 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   val eData = "edata"
   val action = "action"
   val batchUpdaterFn = "batch-updater-fn"
-  val batchUpdateAction = "batch-update"
+  val batchUpdateAction = "batch-create"
   val userEnrollmentAction = "user-enrollment"
 
   // Consumers
@@ -57,8 +57,9 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   val cfBatchManagerProducer = "cf-batch-manager-audit-events-sink"
   val cfBatchManagerFailedEventProducer = "cf-batch-manager-failed-sink"
 
-  //Thresholds
-  val thresholdBatchReadSize: Int = config.getInt("threshold.batch.read.size")
-  val windowShards: Int = config.getInt("task.window.shards")
+  val dbTable: String = config.getString("lms-cassandra.table")
+  val dbKeyspace: String = config.getString("lms-cassandra.keyspace")
+  val dbHost: String = config.getString("lms-cassandra.host")
+  val dbPort: Int = config.getInt("lms-cassandra.port")
 
 }
