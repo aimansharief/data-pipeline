@@ -52,6 +52,12 @@ class ActivityAggregateUpdaterStreamTask(config: ActivityAggregateUpdaterConfig,
       .name(config.certIssueEventProducer).uid(config.certIssueEventProducer)
     enrolmentCompleteStream.getSideOutput(config.auditEventOutputTag).addSink(kafkaConnector.kafkaStringSink(config.kafkaAuditEventTopic))
       .name(config.enrolmentCompleteEventProducer).uid(config.enrolmentCompleteEventProducer)
+    
+    // Add enrollment audit sink for enrollment complete stream conditionally
+    if (config.enrollmentAuditEnabled) {
+      enrolmentCompleteStream.getSideOutput(config.enrollmentAuditEventOutputTag).addSink(kafkaConnector.kafkaStringSink(config.kafkaEnrollmentAuditEventTopic))
+        .name(config.enrollmentAuditCompleteEventProducer).uid(config.enrollmentAuditCompleteEventProducer)
+    }
 
     env.execute(config.jobName)
   }

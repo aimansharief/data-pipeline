@@ -75,6 +75,11 @@ class CollectionProgressCompleteFunction(config: ActivityAggregateUpdaterConfig)
     )
     logger.info("audit event =>"+gson.toJson(auditEvent))
     context.output(config.auditEventOutputTag, gson.toJson(auditEvent))
+    
+    // Also output to enrollment audit tag if enabled
+    if (config.enrollmentAuditEnabled) {
+      context.output(config.enrollmentAuditEventOutputTag, gson.toJson(auditEvent))
+    }
 
   }
 
