@@ -61,5 +61,10 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   val dbKeyspace: String = config.getString("lms-cassandra.keyspace")
   val dbHost: String = config.getString("lms-cassandra.host")
   val dbPort: Int = config.getInt("lms-cassandra.port")
+  val lmsBasePath: String = config.getString("service.lms.basePath")
+  val clBatchCreateRoute: String = config.getString("batch.create.endpoint.cl")
+  val courseBatchCreateRoute: String = config.getString("batch.create.endpoint.course")
+  val clEnrollRoute: String = config.getString("service.clEnroll.endpoint")
+  val courseEnrollRoute: String = config.getString("service.courseEnroll.endpoint")
 
 }

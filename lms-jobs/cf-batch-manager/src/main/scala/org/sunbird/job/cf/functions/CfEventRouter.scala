@@ -34,26 +34,31 @@ class CfEventRouter(config: CfBatchManagerConfig)
     metrics.incCounter(config.totalEventCount)
 
     try {
+      event.validate match {
+        case Some(error) =>
+          logger.error(s"Validation failed for event: mid=${event.mid()} offset=${event.offset}. Reason: $error")
+          metrics.incCounter(config.failedEventCount)
+          return
+        case None =>
+      }
       val action = event.action
-      // TODO: Add validation for each after it matches the action
       action match {
         case config.batchUpdateAction =>
           logger.info(s"Routing to batchUpdate: batchId=${event.batchId}")
           context.output(config.batchUpdateOutputTag, event)
+          metrics.incCounter(config.processedEventCount)
         case config.userEnrollmentAction =>
           logger.info(s"Routing to userEnrollment: batchId=${event.batchId}")
           context.output(config.userEnrollmentOutputTag, event)
+          metrics.incCounter(config.processedEventCount)
         case _ =>
-          logger.error(s"Unsupported action for mid=${event.mid()} batchId=${event.batchId}")
+          logger.error(s"Unsupported action for mid=${event.mid()} batchId=${event.batchId} action=${action}")
           metrics.incCounter(config.failedEventCount)
       }
-      metrics.incCounter(config.processedEventCount)
     } catch {
       case e: Exception =>
-        logger.error(s"Error routing event mid=${event.mid()} batchId=${event.batchId}", e)
         metrics.incCounter(config.failedEventCount)
-        val errorMap = Map("batchId" -> event.batchId)
-        throw new InvalidEventException(e.getMessage, errorMap, e)
+        throw new InvalidEventException(e.getMessage, Map("partition" -> event.partition, "offset" -> event.offset), e)
     }
   }
 }

@@ -32,8 +32,6 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
 
   def enrollmentType: String = readOrDefault[String]("edata.enrollmentType", "")
 
-  def related: Map[String, AnyRef] = readOrDefault[Map[String, AnyRef]]("edata.related", Map[String, AnyRef]())
-
   def name: String = readOrDefault[String]("edata.name", "")
 
   def description: String = readOrDefault[String]("edata.description", "")
@@ -49,9 +47,13 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
   def createdFor: List[String] = readOrDefault[List[String]]("edata.createdFor", List.empty[String])
 
 
-  def isValidEvent: Boolean = {
-    this.eData.nonEmpty && this.action.nonEmpty && this.activityId.nonEmpty && this.activityType.nonEmpty
+  def validate: Option[String] = {
+    if (activityId.isEmpty) return Some("activityId is missing")
+    if (activityType.isEmpty) return Some("activityType is missing")
+    if (activityType != "Competency Framework") return Some(s"Invalid activityType: $activityType. Expected 'Competency Framework'.")
+    if (batchId.isEmpty) return Some("batchId is missing")
+    if (action == "user-enrollment" && userIds.isEmpty) return Some("userIds is missing for user-enrollment action")
+    None
   }
 
-  def version(): String = readOrDefault[String]("ver", "")
 }

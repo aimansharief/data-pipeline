@@ -19,9 +19,9 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
   @transient private var cassandraUtil: CassandraUtil = _
   @transient private var hierarchyHelper: HierarchyHelper = _
   private val httpUtil = new HttpUtil
-  private val lmsServiceBasePath = config.getString("service.lms.basePath", "http://lms-service:9000")
-  private val clBatchCreateEndpoint = lmsServiceBasePath + config.getString("batch.create.endpoint.cl", "/private/v1/batch/create")
-  private val courseBatchCreateEndpoint = lmsServiceBasePath + config.getString("batch.create.endpoint.course", "/private/v1/course/batch/create")
+
+  private val clBatchCreateEndpoint = config.lmsBasePath + config.clBatchCreateRoute
+  private val courseBatchCreateEndpoint = config.lmsBasePath + config.courseBatchCreateRoute
 
   override def open(parameters: Configuration): Unit = {
     super.open(parameters)
@@ -48,7 +48,7 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
     logger.info(s"BatchUpdaterFunction :: Batch update received event: $event activityId = $activityId  activityType = $activityType")
     metrics.incCounter(config.totalEventCount)
     try {
-      if (activityId.nonEmpty && activityType == "CF") {
+      if (activityType.equalsIgnoreCase("Competency Framework")) {
         val hierarchy = hierarchyHelper.getHierarchy(activityId)
         if (!hierarchy.isEmpty) {
           logger.info(s"Fetched hierarchy for id=$activityId")
@@ -97,14 +97,14 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
                                         event: Event): Unit = {
     levelIds.foreach { levelId =>
       val batchId = generateBatchId(cfBatchId, levelId)
-      val body = buildBatchRequestBody(event, levelId, "CL", batchId)
-      logger.info(s"Prepared CL batch payload for levelId=$levelId")
+      val body = buildBatchRequestBody(event, levelId, "Competency Level", batchId)
+      logger.info(s"Prepared Competency Level batch payload: $body for levelId=$levelId")
       callBatchCreateApi(body, clBatchCreateEndpoint)
     }
     courseToLevel.foreach { case (courseId, levelId) =>
       val batchId = generateBatchId(cfBatchId, courseId)
       val body = buildBatchRequestBody(event, courseId, "Course", batchId)
-      logger.info(s"Prepared Course batch payload for courseId=$courseId (levelId=$levelId)")
+      logger.info(s"Prepared Course batch payload: $body for courseId=$courseId (levelId=$levelId)")
       callBatchCreateApi(body, courseBatchCreateEndpoint)
     }
   }
