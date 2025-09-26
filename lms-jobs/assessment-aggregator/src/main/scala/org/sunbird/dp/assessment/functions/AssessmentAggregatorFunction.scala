@@ -8,7 +8,7 @@ import java.util
 import java.util.UUID
 import com.datastax.driver.core.querybuilder.QueryBuilder
 import com.datastax.driver.core.{Row, UDTValue, UserType}
-import com.google.gson.Gson
+import com.google.gson.{Gson, JsonArray}
 import com.google.gson.reflect.TypeToken
 import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.configuration.Configuration
@@ -86,7 +86,11 @@ class AssessmentAggregatorFunction(config: AssessmentAggregatorConfig,
                               metrics: Metrics): Unit = {
     try {
       logger.info("AssessmentAggregatorFunction:: processElement:: event:: " + event)
-      // Validating the contentId
+
+      // Emit individual telemetry events first
+      emitIndividualAssessEvents(event)(metrics, context)
+
+      // Continue with existing assessment aggregation logic
       if (isValidContent(event.courseId, event.contentId)(metrics)) {
         val assessEvents = event.assessEvents.asScala
         if(null != assessEvents && !assessEvents.isEmpty) {
@@ -261,6 +265,94 @@ class AssessmentAggregatorFunction(config: AssessmentAggregatorConfig,
       getQuestionCountFromAPI(contentId)(metrics)
     } else {
       totalQuestionsCountFromCache
+    }
+  }
+
+  /**
+   * Corrected function to emit individual assessment events
+   * Each telemetry event from the events array will be sent as a separate event
+   * to the individual assess events topic.
+   *
+   * @param event - Parent Event object containing the events array
+   * @param metrics - Metrics object
+   * @param context - Flink ProcessFunction context
+   */
+  def emitIndividualAssessEvents(event: Event)
+                                (metrics: Metrics,
+                                 context: ProcessFunction[Event, Event]#Context): Unit = {
+    val gson = new Gson()
+    try {
+      // Convert the event to JSON
+      val eventJson = gson.toJsonTree(event).getAsJsonObject
+      println(" event json :" + eventJson )
+
+      // Navigate to telemetry.map.events
+      if (!eventJson.has("telemetry") || eventJson.get("telemetry").isJsonNull) {
+        logger.warn("No telemetry found in event")
+        return
+      }
+
+      val telemetryJson = eventJson.getAsJsonObject("telemetry")
+      if (!telemetryJson.has("map") || telemetryJson.get("map").isJsonNull) {
+        logger.warn("No map found in telemetry")
+        return
+      }
+
+      val mapJson = telemetryJson.getAsJsonObject("map")
+      if (!mapJson.has("events") || !mapJson.get("events").isJsonArray) {
+        logger.warn("No events array found in telemetry.map")
+        return
+      }
+
+      val eventsArray = mapJson.getAsJsonArray("events")
+      if (eventsArray.size() == 0) {
+        logger.warn("Events array is empty")
+        return
+      }
+
+      logger.info(s"Found ${eventsArray.size()} events to split")
+
+      // Process each telemetry event individually
+      var emitted = 0
+      for (i <- 0 until eventsArray.size()) {
+        try {
+          val telemetryElem = eventsArray.get(i)
+
+          // Clone the entire parent event structure
+          val individualEventJson = gson.toJsonTree(event).getAsJsonObject
+
+          // Navigate to the events array in the clone and replace with single event
+          val clonedTelemetry = individualEventJson.getAsJsonObject("telemetry")
+          val clonedMap = clonedTelemetry.getAsJsonObject("map")
+
+          val singleEventArray = new JsonArray()
+          singleEventArray.add(telemetryElem)
+
+          // Replace the events array with single event
+          clonedMap.remove("events")
+          clonedMap.add("events", singleEventArray)
+
+          // Convert back to Event object
+          val individualEvent = gson.fromJson(individualEventJson, classOf[Event])
+          println(" individual event : "+ individualEvent)
+          context.output(config.individualAssessEventsTag, individualEvent)
+          emitted += 1
+
+          logger.info(s"Emitted individual event ${i + 1} of ${eventsArray.size()}")
+
+        } catch {
+          case ex: Exception =>
+            logger.error(s"Failed to process telemetry element at index $i", ex)
+            metrics.incCounter(config.failedEventCount)
+        }
+      }
+
+      logger.info(s"Successfully emitted $emitted individual assessment events")
+
+    } catch {
+      case ex: Exception =>
+        logger.error("Failed to emit individual assessment events", ex)
+        metrics.incCounter(config.failedEventCount)
     }
   }
 
