@@ -8,7 +8,7 @@ import java.util
 import java.util.UUID
 import com.datastax.driver.core.querybuilder.QueryBuilder
 import com.datastax.driver.core.{Row, UDTValue, UserType}
-import com.google.gson.{Gson, JsonArray}
+import com.google.gson.{Gson, JsonArray, JsonObject}
 import com.google.gson.reflect.TypeToken
 import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.configuration.Configuration
@@ -286,25 +286,31 @@ class AssessmentAggregatorFunction(config: AssessmentAggregatorConfig,
       val eventJson = gson.toJsonTree(event).getAsJsonObject
       println(" event json :" + eventJson )
 
-      // Navigate to telemetry.map.events
-      if (!eventJson.has("telemetry") || eventJson.get("telemetry").isJsonNull) {
-        logger.warn("No telemetry found in event")
+      // Navigate to actual payload
+      val actualEventData =
+        if (eventJson.has("telemetry") && eventJson.getAsJsonObject("telemetry").has("map"))
+          eventJson.getAsJsonObject("telemetry").getAsJsonObject("map")
+        else if (eventJson.has("map"))
+          eventJson.getAsJsonObject("map")
+        else
+          eventJson
+
+      // Extract root metadata
+      val assessmentTs: Option[Long] =
+        if (actualEventData.has("assessmentTs")) Some(actualEventData.get("assessmentTs").getAsLong)
+        else None
+
+      val attemptId: Option[String] =
+        if (actualEventData.has("attemptId")) Some(actualEventData.get("attemptId").getAsString)
+        else None
+
+      // Validate events
+      if (!actualEventData.has("events") || !actualEventData.get("events").isJsonArray) {
+        logger.warn("No events array found in event")
         return
       }
 
-      val telemetryJson = eventJson.getAsJsonObject("telemetry")
-      if (!telemetryJson.has("map") || telemetryJson.get("map").isJsonNull) {
-        logger.warn("No map found in telemetry")
-        return
-      }
-
-      val mapJson = telemetryJson.getAsJsonObject("map")
-      if (!mapJson.has("events") || !mapJson.get("events").isJsonArray) {
-        logger.warn("No events array found in telemetry.map")
-        return
-      }
-
-      val eventsArray = mapJson.getAsJsonArray("events")
+      val eventsArray = actualEventData.getAsJsonArray("events")
       if (eventsArray.size() == 0) {
         logger.warn("Events array is empty")
         return
@@ -316,25 +322,34 @@ class AssessmentAggregatorFunction(config: AssessmentAggregatorConfig,
       var emitted = 0
       for (i <- 0 until eventsArray.size()) {
         try {
-          val telemetryElem = eventsArray.get(i)
+          val telemetryElem = eventsArray.get(i).getAsJsonObject
 
-          // Clone the entire parent event structure
-          val individualEventJson = gson.toJsonTree(event).getAsJsonObject
+          // Enrich edata with attemptId and assessmentTs if not already present
+          if (telemetryElem.has("edata")) {
+            val edata = telemetryElem.getAsJsonObject("edata")
 
-          // Navigate to the events array in the clone and replace with single event
-          val clonedTelemetry = individualEventJson.getAsJsonObject("telemetry")
-          val clonedMap = clonedTelemetry.getAsJsonObject("map")
+            // Only add if not already present in edata
+            if (!edata.has("attemptId")) {
+              attemptId.foreach(id => edata.addProperty("attemptId", id))
+            }
+            if (!edata.has("assessmentTs")) {
+              assessmentTs.foreach(ts => edata.addProperty("assessmentTs", ts))
+            }
+          }
 
-          val singleEventArray = new JsonArray()
-          singleEventArray.add(telemetryElem)
+          // ✅ Convert the individual event directly to Map[String, AnyRef]
+          val mapType = new com.google.gson.reflect.TypeToken[java.util.Map[String, AnyRef]]() {}.getType
+          val safeEventMap = gson.fromJson[java.util.Map[String, AnyRef]](telemetryElem, mapType)
 
-          // Replace the events array with single event
-          clonedMap.remove("events")
-          clonedMap.add("events", singleEventArray)
+          val individualEvent = new Event(
+            safeEventMap.asInstanceOf[java.util.Map[String, Any]]
+          )
 
-          // Convert back to Event object
-          val individualEvent = gson.fromJson(individualEventJson, classOf[Event])
-          println(" individual event : "+ individualEvent)
+          println(" individualEvent : "+ individualEvent)
+
+          println(s"Emitting individual event ${i + 1}: ${telemetryElem.toString.take(200)}")
+
+          // ✅ Emit with correct OutputTag
           context.output(config.individualAssessEventsTag, individualEvent)
           emitted += 1
 
@@ -344,6 +359,11 @@ class AssessmentAggregatorFunction(config: AssessmentAggregatorConfig,
           case ex: Exception =>
             logger.error(s"Failed to process telemetry element at index $i", ex)
             metrics.incCounter(config.failedEventCount)
+            try {
+              logger.error(s"Failed element: ${eventsArray.get(i).toString.take(200)}")
+            } catch {
+              case _: Exception =>
+            }
         }
       }
 
