@@ -88,7 +88,12 @@ class AssessmentAggregatorFunction(config: AssessmentAggregatorConfig,
       logger.info("AssessmentAggregatorFunction:: processElement:: event:: " + event)
 
       // Emit individual telemetry events first
-      emitIndividualAssessEvents(event)(metrics, context)
+      if (config.individualAssessEventsEnabled) {
+        logger.info("Individual assess events feature is enabled. Emitting individual events...")
+        emitIndividualAssessEvents(event)(metrics, context)
+      } else {
+        logger.debug("Individual assess events feature is disabled. Skipping individual event emission.")
+      }
 
       // Continue with existing assessment aggregation logic
       if (isValidContent(event.courseId, event.contentId)(metrics)) {

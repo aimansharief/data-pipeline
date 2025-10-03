@@ -26,6 +26,9 @@ class AssessmentAggregatorConfig(override val config: Config) extends BaseJobCon
   val kafkaCertIssueTopic: String = config.getString("kafka.output.certissue.topic")
   val kafkaIndividualAssessEventsTopic: String = config.getString("kafka.individual.assess.events.topic")
 
+  // Individual Assessment Events Feature Flag
+  val individualAssessEventsEnabled: Boolean = config.getBoolean("kafka.individual.assess.events.enabled")
+
   // Metric List
   val dbUpdateCount = "db-update-count"
   val dbReadCount = "db-read-count"

@@ -65,11 +65,14 @@ class AssessmentAggregatorStreamTask(config: AssessmentAggregatorConfig, kafkaCo
           .name(config.certIssueEventSink).uid(config.certIssueEventSink)
           .setParallelism(config.downstreamOperatorsParallelism)
 
+      // Conditionally add individual assess events sink only if enabled
+      if (config.individualAssessEventsEnabled) {
         aggregatorStream.getSideOutput(config.individualAssessEventsTag)
           .addSink(kafkaConnector.kafkaEventSink[Event](config.kafkaIndividualAssessEventsTopic))
           .name(config.individualAssessEventsSink)
           .uid(config.individualAssessEvents)
           .setParallelism(config.downstreamOperatorsParallelism)
+      }
 
         env.execute(config.jobName)
     }
