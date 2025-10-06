@@ -24,6 +24,10 @@ class AssessmentAggregatorConfig(override val config: Config) extends BaseJobCon
   val kafkaInputTopic: String = config.getString("kafka.input.topic")
   val kafkaFailedTopic: String = config.getString("kafka.failed.topic")
   val kafkaCertIssueTopic: String = config.getString("kafka.output.certissue.topic")
+  val kafkaIndividualAssessEventsTopic: String = config.getString("kafka.individual.assess.events.topic")
+
+  // Individual Assessment Events Feature Flag
+  val individualAssessEventsEnabled: Boolean = config.getBoolean("kafka.individual.assess.events.enabled")
 
   // Metric List
   val dbUpdateCount = "db-update-count"
@@ -60,9 +64,11 @@ class AssessmentAggregatorConfig(override val config: Config) extends BaseJobCon
 
   // Consumers
   val assessmentAggConsumer = "assessment-agg-consumer"
+  val individualAssessEvents = "individual-assess-events"
 
   // Functions
   val assessmentAggregatorFunction = "AssessmentAggregatorFunction"
+  val individualAssessEventsSink = "IndividualAssessEventsSink"
 
   // Producers
   val assessFailedEventsSink = "assess-failed-events-sink"
@@ -82,6 +88,8 @@ class AssessmentAggregatorConfig(override val config: Config) extends BaseJobCon
   val aggLastUpdated = "agg_last_updated"
   val aggDetails = "agg_details"
   val aggregates = "aggregates"
+
+  val individualAssessEventsTag:OutputTag[Event] = OutputTag[Event]("individual-assess-events")
 
   val aggType = config.getString("user.activity.agg.type")
 
