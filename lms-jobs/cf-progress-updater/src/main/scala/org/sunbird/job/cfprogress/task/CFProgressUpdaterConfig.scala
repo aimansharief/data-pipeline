@@ -24,6 +24,9 @@ class CFProgressUpdaterConfig(override val config: Config) extends BaseJobConfig
   val failedEventCount = "failed-events-count"
   val skippedEventCount = "skipped-event-count"
   val dbWriteCount = "db-write-count"
+  val dbReadCount = "db-read-count"
+  val cacheHitCount = "cache-hit-count"
+  val cacheMissCount = "cache-miss-count"
 
   // Consumers
   val cfProgressConsumer = "cf-progress-consumer"
@@ -34,5 +37,12 @@ class CFProgressUpdaterConfig(override val config: Config) extends BaseJobConfig
   val dbHost: String = config.getString("lms-cassandra.host")
   val dbPort: Int = config.getInt("lms-cassandra.port")
   val progressPrimaryKey: List[String] = List("userId", "activityId", "batchId")
+
+  // User Enrolments Configuration
+  val courseKeyspace: String = if (config.hasPath("course-cassandra.keyspace")) config.getString("course-cassandra.keyspace") else "sunbird_courses"
+  val courseEnrolmentsTable: String = if (config.hasPath("course-cassandra.user-enrolments.table")) config.getString("course-cassandra.user-enrolments.table") else "user_enrolments"
+
+  // Redis Configurations
+  val nodeStore: Int = config.getInt("redis.database.relationCache.id")
 
 }

@@ -4,35 +4,70 @@ import org.apache.commons.lang3.StringUtils
 import org.sunbird.job.domain.reader.JobRequest
 
 import java.util
+import scala.collection.JavaConverters._
 
 class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) extends JobRequest(eventMap, partition, offset) {
 
   val jobName = "CFProgressUpdater"
 
-  def identifier: String = readOrDefault[String]("edata.identifier", "")
+  def eid: String = readOrDefault[String]("eid", "")
 
-  def action: String = readOrDefault[String]("edata.action", "")
+  def identifier: String = readOrDefault[String]("object.rollup.l1", "")
 
-  def userId: String = readOrDefault[String]("edata.userId", "")
+  def action: String = readOrDefault[String]("edata.type", "")
 
-  def activityId: String = readOrDefault[String]("edata.activityId", "")
+  def userId: String = {
+    val actorId = readOrDefault[String]("actor.id", "")
+    if (StringUtils.isNotBlank(actorId)) actorId
+    else readOrDefault[String]("object.id", "")
+  }
 
-  def activityType: String = readOrDefault[String]("edata.activityType", "")
+  def activityId: String = {
+    try {
+      val cdata = readOrDefault[java.util.List[java.util.Map[String, Any]]]("context.cdata", new util.ArrayList())
+      cdata.asScala.find(item => {
+        val cdataMap = item.asInstanceOf[java.util.Map[String, Any]]
+        cdataMap.get("type") == "Course"
+      }).map(item => {
+        val cdataMap = item.asInstanceOf[java.util.Map[String, Any]]
+        cdataMap.get("id").asInstanceOf[String]
+      }).getOrElse(readOrDefault[String]("object.rollup.l1", ""))
+    } catch {
+      case _: Exception => readOrDefault[String]("object.rollup.l1", "")
+    }
+  }
 
-  def batchId: String = readOrDefault[String]("edata.batchId", "")
+  def activityType: String = "Course"
+
+  def batchId: String = {
+    try {
+      val cdata = readOrDefault[java.util.List[java.util.Map[String, Any]]]("context.cdata", new util.ArrayList())
+      cdata.asScala.find(item => {
+        val cdataMap = item.asInstanceOf[java.util.Map[String, Any]]
+        cdataMap.get("type") == "CourseBatch"
+      }).map(item => {
+        val cdataMap = item.asInstanceOf[java.util.Map[String, Any]]
+        cdataMap.get("id").asInstanceOf[String]
+      }).getOrElse("")
+    } catch {
+      case _: Exception => ""
+    }
+  }
+
+  def courseId: String = activityId
 
   def progress: Double = readOrDefault[Double]("edata.progress", 0.0)
 
   def eData: Map[String, AnyRef] = readOrDefault("edata", new util.HashMap[String, AnyRef]()).asInstanceOf[Map[String, AnyRef]]
 
+  def context: Map[String, AnyRef] = readOrDefault("context", new util.HashMap[String, AnyRef]()).asInstanceOf[Map[String, AnyRef]]
+
+  def objectData: Map[String, AnyRef] = readOrDefault("object", new util.HashMap[String, AnyRef]()).asInstanceOf[Map[String, AnyRef]]
+
   def isValidEvent(allowedActions: List[String]): Boolean = {
-    // Dummy implementation - validate that required fields are present and action is allowed
     allowedActions.contains(action) && 
-      StringUtils.isNotBlank(identifier) && 
       StringUtils.isNotBlank(userId) && 
-      StringUtils.isNotBlank(activityId) &&
-      StringUtils.isNotBlank(activityType) &&
-      progress >= 0.0 && progress <= 100.0
+      (eid == "AUDIT")
   }
 
 }
