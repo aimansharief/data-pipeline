@@ -23,6 +23,7 @@ class ActivityAggregateUpdaterConfig(override val config: Config) extends BaseJo
   val kafkaAuditEventTopic: String = config.getString("kafka.output.audit.topic")
   val kafkaFailedEventTopic: String = config.getString("kafka.output.failed.topic")
   val kafkaCertIssueTopic: String = config.getString("kafka.output.certissue.topic")
+  val kafkaEnrollmentAuditEventTopic: String = config.getString("kafka.output.enrollment.audit.topic")
 
   override val kafkaConsumerParallelism: Int = config.getInt("task.consumer.parallelism")
   val activityAggregateUpdaterParallelism: Int = config.getInt("task.activity.agg.parallelism")
@@ -63,6 +64,8 @@ class ActivityAggregateUpdaterConfig(override val config: Config) extends BaseJo
   val uniqueConsumptionOutput: OutputTag[Map[String, AnyRef]] = OutputTag[Map[String, AnyRef]](uniqueConsumptionOutputTagName)
   val auditEventOutputTagName = "audit-events"
   val auditEventOutputTag: OutputTag[String] = OutputTag[String](auditEventOutputTagName)
+  val enrollmentAuditEventOutputTagName = "enrollment-audit-events"
+  val enrollmentAuditEventOutputTag: OutputTag[String] = OutputTag[String](enrollmentAuditEventOutputTagName)
   val failedEventOutputTagName = "failed-events"
   val failedEventOutputTag: OutputTag[String] = OutputTag[String](failedEventOutputTagName)
   val collectionCompleteOutputTagName = "collection-progress-complete-events"
@@ -115,6 +118,7 @@ class ActivityAggregateUpdaterConfig(override val config: Config) extends BaseJo
   val enrolmentCompleteEventProducer = "enrolment-complete-audit-sink"
   val activityAggFailedEventProducer = "activity-aggregate-updater-failed-sink"
   val certIssueEventProducer = "certificate-issue-event-producer"
+  val enrollmentAuditCompleteEventProducer = "enrollment-audit-complete-events-sink"
 
   //Thresholds
   val thresholdBatchReadInterval: Int = config.getInt("threshold.batch.read.interval")
@@ -128,6 +132,7 @@ class ActivityAggregateUpdaterConfig(override val config: Config) extends BaseJo
   val dedupEnabled: Boolean = config.getBoolean("activity.input.dedup.enabled")
   val statusCacheExpirySec: Int = config.getInt("activity.collection.status.cache.expiry")
   val filterCompletedEnrolments: Boolean =  if (config.hasPath("activity.filter.processed.enrolments")) config.getBoolean("activity.filter.processed.enrolments") else true
+  val enrollmentAuditEnabled: Boolean = if (config.hasPath("activity.enrollment.audit.enabled")) config.getBoolean("activity.enrollment.audit.enabled") else false
 
   // Other services configuration
   val searchServiceBasePath: String = config.getString("service.search.basePath")

@@ -8,7 +8,7 @@ import java.util
 import java.util.UUID
 import com.datastax.driver.core.querybuilder.QueryBuilder
 import com.datastax.driver.core.{Row, UDTValue, UserType}
-import com.google.gson.Gson
+import com.google.gson.{Gson, JsonArray, JsonObject}
 import com.google.gson.reflect.TypeToken
 import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.configuration.Configuration
@@ -86,7 +86,16 @@ class AssessmentAggregatorFunction(config: AssessmentAggregatorConfig,
                               metrics: Metrics): Unit = {
     try {
       logger.info("AssessmentAggregatorFunction:: processElement:: event:: " + event)
-      // Validating the contentId
+
+      // Emit individual telemetry events first
+      if (config.individualAssessEventsEnabled) {
+        logger.info("Individual assess events feature is enabled. Emitting individual events...")
+        emitIndividualAssessEvents(event)(metrics, context)
+      } else {
+        logger.debug("Individual assess events feature is disabled. Skipping individual event emission.")
+      }
+
+      // Continue with existing assessment aggregation logic
       if (isValidContent(event.courseId, event.contentId)(metrics)) {
         val assessEvents = event.assessEvents.asScala
         if(null != assessEvents && !assessEvents.isEmpty) {
@@ -261,6 +270,114 @@ class AssessmentAggregatorFunction(config: AssessmentAggregatorConfig,
       getQuestionCountFromAPI(contentId)(metrics)
     } else {
       totalQuestionsCountFromCache
+    }
+  }
+
+  /**
+   * Corrected function to emit individual assessment events
+   * Each telemetry event from the events array will be sent as a separate event
+   * to the individual assess events topic.
+   *
+   * @param event - Parent Event object containing the events array
+   * @param metrics - Metrics object
+   * @param context - Flink ProcessFunction context
+   */
+  def emitIndividualAssessEvents(event: Event)
+                                (metrics: Metrics,
+                                 context: ProcessFunction[Event, Event]#Context): Unit = {
+    val gson = new Gson()
+    try {
+      // Convert the event to JSON
+      val eventJson = gson.toJsonTree(event).getAsJsonObject
+      println(" event json :" + eventJson )
+
+      // Navigate to actual payload
+      val actualEventData =
+        if (eventJson.has("telemetry") && eventJson.getAsJsonObject("telemetry").has("map"))
+          eventJson.getAsJsonObject("telemetry").getAsJsonObject("map")
+        else if (eventJson.has("map"))
+          eventJson.getAsJsonObject("map")
+        else
+          eventJson
+
+      // Extract root metadata
+      val assessmentTs: Option[Long] =
+        if (actualEventData.has("assessmentTs")) Some(actualEventData.get("assessmentTs").getAsLong)
+        else None
+
+      val attemptId: Option[String] =
+        if (actualEventData.has("attemptId")) Some(actualEventData.get("attemptId").getAsString)
+        else None
+
+      // Validate events
+      if (!actualEventData.has("events") || !actualEventData.get("events").isJsonArray) {
+        logger.warn("No events array found in event")
+        return
+      }
+
+      val eventsArray = actualEventData.getAsJsonArray("events")
+      if (eventsArray.size() == 0) {
+        logger.warn("Events array is empty")
+        return
+      }
+
+      logger.info(s"Found ${eventsArray.size()} events to split")
+
+      // Process each telemetry event individually
+      var emitted = 0
+      for (i <- 0 until eventsArray.size()) {
+        try {
+          val telemetryElem = eventsArray.get(i).getAsJsonObject
+
+          // Enrich edata with attemptId and assessmentTs if not already present
+          if (telemetryElem.has("edata")) {
+            val edata = telemetryElem.getAsJsonObject("edata")
+
+            // Only add if not already present in edata
+            if (!edata.has("attemptId")) {
+              attemptId.foreach(id => edata.addProperty("attemptId", id))
+            }
+            if (!edata.has("assessmentTs")) {
+              assessmentTs.foreach(ts => edata.addProperty("assessmentTs", ts))
+            }
+          }
+
+          // ✅ Convert the individual event directly to Map[String, AnyRef]
+          val mapType = new com.google.gson.reflect.TypeToken[java.util.Map[String, AnyRef]]() {}.getType
+          val safeEventMap = gson.fromJson[java.util.Map[String, AnyRef]](telemetryElem, mapType)
+
+          val individualEvent = new Event(
+            safeEventMap.asInstanceOf[java.util.Map[String, Any]]
+          )
+
+          println(" individualEvent : "+ individualEvent)
+
+          println(s"Emitting individual event ${i + 1}: ${telemetryElem.toString.take(200)}")
+
+          // ✅ Emit with correct OutputTag
+          context.output(config.individualAssessEventsTag, individualEvent)
+          emitted += 1
+
+          logger.info(s"Emitted individual event ${i + 1} of ${eventsArray.size()}")
+
+        } catch {
+          case ex: Exception =>
+            logger.error(s"Failed to process telemetry element at index $i", ex)
+            metrics.incCounter(config.failedEventCount)
+            try {
+              logger.error(s"Failed element: ${eventsArray.get(i).toString.take(200)}")
+            } catch {
+              case _: Exception =>
+            }
+        }
+      }
+
+      logger.info(s"Successfully emitted $emitted individual assessment events")
+
+    } catch {
+      case ex: Exception =>
+        logger.error("Failed to emit individual assessment events", ex)
+        metrics.incCounter(config.failedEventCount)
     }
   }
 
