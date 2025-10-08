@@ -27,9 +27,7 @@ class CfEventRouter(config: CfBatchManagerConfig)
     List(config.totalEventCount, config.failedEventCount, config.processedEventCount)
   }
 
-  override def processElement(event: Event,
-                              context: ProcessFunction[Event, Event]#Context,
-                              metrics: Metrics): Unit = {
+  override def processElement(event: Event, context: ProcessFunction[Event, Event]#Context, metrics: Metrics): Unit = {
     logger.info(s"Routing event: mid=${event.mid()} action=${event.action} batchId=${event.batchId}")
     metrics.incCounter(config.totalEventCount)
 
@@ -48,7 +46,7 @@ class CfEventRouter(config: CfBatchManagerConfig)
           context.output(config.batchUpdateOutputTag, event)
           metrics.incCounter(config.processedEventCount)
         case config.userEnrollmentAction =>
-          logger.info(s"Routing to userEnrollment: batchId=${event.batchId}")
+          logger.info(s"Routing to userEnrollment: batchId=${event.batchId} action=$action")
           context.output(config.userEnrollmentOutputTag, event)
           metrics.incCounter(config.processedEventCount)
         case _ =>

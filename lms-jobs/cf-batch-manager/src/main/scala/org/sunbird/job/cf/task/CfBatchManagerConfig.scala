@@ -9,7 +9,7 @@ import org.apache.flink.streaming.api.scala.OutputTag
 import org.sunbird.job.BaseJobConfig
 import org.sunbird.job.cf.domain.Event
 
-class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(config, "cf-batch-manager") {
+class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(config, "cf-batch-manager") with Serializable {
 
   private val serialVersionUID = 2905979434303791379L
 
@@ -20,6 +20,7 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
 
   // Kafka Topics Configuration
   val kafkaInputTopic: String = config.getString("kafka.input.topic")
+  val kafkaProgressionAuditTopic: String = if (config.hasPath("kafka.audit.progression.topic")) config.getString("kafka.audit.progression.topic") else "dev.user.enrollment.audit"
   val kafkaAuditEventTopic: String = config.getString("kafka.output.audit.topic")
   val kafkaFailedEventTopic: String = config.getString("kafka.output.failed.topic")
 
@@ -33,13 +34,14 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
 
   // Tags
   val auditEventOutputTagName = "audit-events"
-  val auditEventOutputTag: OutputTag[String] = OutputTag[String](auditEventOutputTagName)
+  val auditEventOutputTag: OutputTag[String] = new OutputTag[String](auditEventOutputTagName)
   val failedEventOutputTagName = "failed-events"
-  val failedEventOutputTag: OutputTag[String] = OutputTag[String](failedEventOutputTagName)
+  val failedEventOutputTag: OutputTag[String] = new OutputTag[String](failedEventOutputTagName)
   val batchUpdateOutputTagName = "batch-update-events"
-  val batchUpdateOutputTag: OutputTag[Event] = OutputTag[Event](batchUpdateOutputTagName)
-  val userEnrollmentOutputTagName = "user-enrollment-events"
-  val userEnrollmentOutputTag: OutputTag[Event] = OutputTag[Event](userEnrollmentOutputTagName)
+  val batchUpdateOutputTag: OutputTag[Event] = new OutputTag[Event](batchUpdateOutputTagName)
+  // Use a timestamp-based unique identifier with specific module prefix
+  val userEnrollmentOutputTagName = s"cf-batch-mgr-ue"
+  val userEnrollmentOutputTag: OutputTag[Event] = new OutputTag[Event](userEnrollmentOutputTagName)
 
   // constants
   val batchId = "batchId"
@@ -49,9 +51,13 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   val batchUpdaterFn = "batch-updater-fn"
   val batchUpdateAction = "batch-create"
   val userEnrollmentAction = "activity-enroll"
+  val auditProgressionEid = "AUDIT"
+  val auditProgressionType = "enrol-complete"
+  val entranceExamOptionalThreshold: Int = if (config.hasPath("entrance.exam.optional.threshold.percent")) config.getInt("entrance.exam.optional.threshold.percent") else 100
 
   // Consumers
   val cfBatchManagerConsumer = "cf-batch-manager-consumer"
+  val cfProgressionAuditConsumer = "cf-progress-audit-consumer"
 
   // Producers
   val cfBatchManagerProducer = "cf-batch-manager-audit-events-sink"
@@ -66,5 +72,23 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   val courseBatchCreateRoute: String = config.getString("batch.create.endpoint.course")
   val clEnrollRoute: String = config.getString("service.clEnroll.endpoint")
   val courseEnrollRoute: String = config.getString("service.courseEnroll.endpoint")
+  val userEnrollKeyspace: String = config.getString("user-enrolments-cassandra.keyspace")
+  val userEnrollTable: String = config.getString("user-enrolments-cassandra.table")
+  // sb collection tracking keyspace/table (for statusmap lookups)
+  val sbCollectionKeyspace: String = config.getString("sb-collection-cassandra.keyspace")
+  val sbCollectionTable: String = config.getString("sb-collection-cassandra.table")
+
+  // assessment aggregator keyspace/table
+  val assessmentAggKeyspace: String = if (config.hasPath("assessment-aggregator-cassandra.keyspace")) config.getString("assessment-aggregator-cassandra.keyspace") else userEnrollKeyspace
+  val assessmentAggTable: String = if (config.hasPath("assessment-aggregator-cassandra.table")) config.getString("assessment-aggregator-cassandra.table") else "assessment_aggregator"
+
+  // Redis CF hierarchy cache (single redis block)
+  val redisConnectionTimeout: Int = if (config.hasPath("redis.connection.timeout")) config.getInt("redis.connection.timeout") else 30000
+  val cfHierarchyRedisHost: String = if (config.hasPath("redis.host")) config.getString("redis.host") else "localhost"
+  val cfHierarchyRedisPort: Int = if (config.hasPath("redis.port")) config.getInt("redis.port") else 6379
+  val cfHierarchyRedisDb: Int = if (config.hasPath("redis.database.index")) config.getInt("redis.database.index") else 6
+
+  // Search Service Configuration
+  val searchBasePath: String = getString("service.search.basePath", "http://search-service:9000")
 
 }

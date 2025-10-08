@@ -2,7 +2,7 @@ package org.sunbird.job.domain.reader
 
 import org.sunbird.job.util.JSONUtil
 
-abstract class JobRequest(val map: java.util.Map[String, Any], val partition: Int, val offset: Long) {
+abstract class JobRequest(val map: java.util.Map[String, Any], val partition: Int, val offset: Long) extends Serializable {
 
   def getMap(): java.util.Map[String, Any] = map
 

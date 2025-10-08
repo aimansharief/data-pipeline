@@ -21,31 +21,41 @@ class CfBatchManagerStreamTask(config: CfBatchManagerConfig, kafkaConnector: Fli
     implicit val eventTypeInfo: TypeInformation[Event] = TypeExtractor.getForClass(classOf[Event])
     implicit val stringTypeInfo: TypeInformation[String] = TypeExtractor.getForClass(classOf[String])
 
-    val source = kafkaConnector.kafkaJobRequestSource[Event](config.kafkaInputTopic)
+    val primarySource = kafkaConnector.kafkaJobRequestSource[Event](config.kafkaInputTopic)
+    val progressionSource = kafkaConnector.kafkaJobRequestSource[Event](config.kafkaProgressionAuditTopic)
 
-    val routerStream = env.addSource(source).name(config.cfBatchManagerConsumer)
+    // Extract constants to avoid serialization issues with config object
+    val batchUpdateAction = config.batchUpdateAction
+    val userEnrollmentAction = config.userEnrollmentAction
+
+    // Process events directly without router to avoid side output issues
+    val batchUpdateStream = env.addSource(primarySource).name(config.cfBatchManagerConsumer)
       .uid(config.cfBatchManagerConsumer).setParallelism(config.kafkaConsumerParallelism)
-      .rebalance
-      .process(new CfEventRouter(config))
-      .name("cf-batch-manager-router")
-      .uid("cf-batch-manager-router")
-      .setParallelism(config.kafkaConsumerParallelism)
-
-    // Route to BatchUpdaterFunction
-    val batchUpdateStream = routerStream.getSideOutput(config.batchUpdateOutputTag)
+      .filter(_.action == batchUpdateAction)
       .process(new BatchUpdaterFunction(config))
       .name(config.batchUpdaterFn)
       .uid(config.batchUpdaterFn)
       .setParallelism(config.batchUpdaterParallelism)
 
-    // Route to UserEnrollmentFunction
-    val userEnrollmentStream = routerStream.getSideOutput(config.userEnrollmentOutputTag)
+    val userEnrollmentStream = env.addSource(primarySource).name(s"${config.cfBatchManagerConsumer}-ue")
+      .uid(s"${config.cfBatchManagerConsumer}-ue").setParallelism(config.kafkaConsumerParallelism)
+      .filter(event => event.action == userEnrollmentAction)
       .process(new UserEnrollmentFunction(config))
       .name("user-enrollment-fn")
       .uid("user-enrollment-fn")
       .setParallelism(config.batchUpdaterParallelism)
 
-    // Handle side outputs from both functions
+    // New progression audit stream (AUDIT enrol-complete events) directly to user enrollment (bypasses CfEventRouter)
+    val auditProgressionStream = env.addSource(progressionSource)
+      .name(config.cfProgressionAuditConsumer)
+      .uid(config.cfProgressionAuditConsumer)
+      .setParallelism(config.kafkaConsumerParallelism)
+      .process(new UserEnrollmentFunction(config))
+      .name("user-enrollment-fn-audit-progression")
+      .uid("user-enrollment-fn-audit-progression")
+      .setParallelism(config.batchUpdaterParallelism)
+
+    // Side outputs
     batchUpdateStream.getSideOutput(config.auditEventOutputTag).addSink(kafkaConnector.kafkaStringSink(config.kafkaAuditEventTopic))
       .name(config.cfBatchManagerProducer).uid(config.cfBatchManagerProducer)
     batchUpdateStream.getSideOutput(config.failedEventOutputTag).addSink(kafkaConnector.kafkaStringSink(config.kafkaFailedEventTopic))
@@ -56,10 +66,14 @@ class CfBatchManagerStreamTask(config: CfBatchManagerConfig, kafkaConnector: Fli
     userEnrollmentStream.getSideOutput(config.failedEventOutputTag).addSink(kafkaConnector.kafkaStringSink(config.kafkaFailedEventTopic))
       .name("user-enrollment-failed-producer").uid("user-enrollment-failed-producer")
 
+    auditProgressionStream.getSideOutput(config.auditEventOutputTag).addSink(kafkaConnector.kafkaStringSink(config.kafkaAuditEventTopic))
+      .name("audit-progression-audit-producer").uid("audit-progression-audit-producer")
+    auditProgressionStream.getSideOutput(config.failedEventOutputTag).addSink(kafkaConnector.kafkaStringSink(config.kafkaFailedEventTopic))
+      .name("audit-progression-failed-producer").uid("audit-progression-failed-producer")
+
     logger.info(s"Starting Flink job: ${config.jobName}")
     env.execute(config.jobName)
   }
-
 
 }
 
