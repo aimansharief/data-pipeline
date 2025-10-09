@@ -122,7 +122,13 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
 
           createBatchesForHierarchy(cfBatchId, levelIds.toList, courseToLevel.toMap, examCourseIds.toSet, event)
           // Emit an event to trigger CF batch cache build in Redis
-          val cacheEvent = event.setAction("cf-batch-cache-create")
+          val eventMap = new java.util.HashMap[String, Any]()
+          eventMap.putAll(event.getMap())
+          val edata = new java.util.HashMap[String, Any]()
+          edata.putAll(event.eData.asJava)
+          edata.put("action", "cf-batch-cache-create")
+          eventMap.put("edata", edata)
+          val cacheEvent = new org.sunbird.job.cf.domain.Event(eventMap, event.partition, event.offset)
           context.output(config.batchCacheOutputTag, cacheEvent)
           metrics.incCounter(config.processedEventCount)
         }
