@@ -87,7 +87,7 @@ class CFBatchCacheUpdate(config: CfBatchManagerConfig)
     result.toMap
   }
 
-  private def getAllCoursesUnderCF(hierarchy: java.util.Map[String, AnyRef]): List[String] = {
+  private def getAllCoursesUnderCF(hierarchy: java.util.Map[String, AnyRef], baseBatchId: String): List[String] = {
     val all = scala.collection.mutable.ListBuffer[String]()
     val children = hierarchyHelper.getChildren(hierarchy).asScala
     children.foreach { child =>
@@ -99,7 +99,7 @@ class CFBatchCacheUpdate(config: CfBatchManagerConfig)
           .map(_.getOrDefault("identifier", "").asInstanceOf[String])
           .filter(id => id != null && id.nonEmpty)
           .toList
-        all ++= courseIds
+        all ++= courseIds.map(cid => s"$baseBatchId:$cid")
       }
     }
     all.toList.distinct
@@ -141,8 +141,8 @@ class CFBatchCacheUpdate(config: CfBatchManagerConfig)
           if (hierarchyCache != null) {
             storeDataInCache(baseBatchId, "leafnodes", leafNodesMap.asInstanceOf[Map[String, AnyRef]], hierarchyCache)
             storeDataInCache(baseBatchId, "ancestors", ancestorsMap.asInstanceOf[Map[String, AnyRef]], hierarchyCache)
-            // Root-level leafnodes key: <batchId>-leafnodes, values are raw courseIds (without batch prefix)
-            val allCourses = getAllCoursesUnderCF(hierarchy)
+            // Root-level leafnodes key: <batchId>-leafnodes, values are baseBatchId:courseId entries
+            val allCourses = getAllCoursesUnderCF(hierarchy, baseBatchId)
             val rootKey = s"${baseBatchId}-leafnodes"
             if (allCourses.nonEmpty) hierarchyCache.createListWithRetry(rootKey, allCourses)
           }
