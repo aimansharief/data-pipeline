@@ -87,6 +87,24 @@ class CFBatchCacheUpdate(config: CfBatchManagerConfig)
     result.toMap
   }
 
+  private def getAllCoursesUnderCF(hierarchy: java.util.Map[String, AnyRef]): List[String] = {
+    val all = scala.collection.mutable.ListBuffer[String]()
+    val children = hierarchyHelper.getChildren(hierarchy).asScala
+    children.foreach { child =>
+      val primaryCategory = child.getOrDefault("primaryCategory", "").asInstanceOf[String]
+      if (primaryCategory.equalsIgnoreCase("Competency Level")) {
+        val levelChildren = child.getOrDefault("children", java.util.Collections.emptyList()).asInstanceOf[java.util.List[java.util.Map[String, AnyRef]]]
+        val courseIds = levelChildren.asScala
+          .filter(_.getOrDefault("primaryCategory", "").asInstanceOf[String].equalsIgnoreCase("Course"))
+          .map(_.getOrDefault("identifier", "").asInstanceOf[String])
+          .filter(id => id != null && id.nonEmpty)
+          .toList
+        all ++= courseIds
+      }
+    }
+    all.toList.distinct
+  }
+
   private def getAncestors(hierarchy: java.util.Map[String, AnyRef], cfId: String, baseBatchId: String): Map[String, List[String]] = {
     val result = scala.collection.mutable.Map[String, List[String]]()
     val children = hierarchyHelper.getChildren(hierarchy).asScala
@@ -123,6 +141,10 @@ class CFBatchCacheUpdate(config: CfBatchManagerConfig)
           if (hierarchyCache != null) {
             storeDataInCache(baseBatchId, "leafnodes", leafNodesMap.asInstanceOf[Map[String, AnyRef]], hierarchyCache)
             storeDataInCache(baseBatchId, "ancestors", ancestorsMap.asInstanceOf[Map[String, AnyRef]], hierarchyCache)
+            // Root-level leafnodes key: <batchId>-leafnodes, values are raw courseIds (without batch prefix)
+            val allCourses = getAllCoursesUnderCF(hierarchy)
+            val rootKey = s"${baseBatchId}-leafnodes"
+            if (allCourses.nonEmpty) hierarchyCache.createListWithRetry(rootKey, allCourses)
           }
           val clCount = leafNodesMap.size
           val totalCourses = leafNodesMap.values.map(_.size).sum
