@@ -55,6 +55,7 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   val batchUpdaterFn = "batch-updater-fn"
   val batchUpdateAction = "batch-create"
   val userEnrollmentAction = "activity-enroll"
+  val batchCacheCreateAction = "cf-batch-cache-create"
   val auditProgressionEid = "AUDIT"
   val auditProgressionType = "enrol-complete"
   val entranceExamOptionalThreshold: Int = if (config.hasPath("entrance.exam.optional.threshold.percent")) config.getInt("entrance.exam.optional.threshold.percent") else 100

@@ -131,6 +131,12 @@ class CFBatchCacheUpdate(config: CfBatchManagerConfig)
   override def processElement(event: Event, context: ProcessFunction[Event, Event]#Context, metrics: Metrics): Unit = {
     metrics.incCounter(config.totalEventCount)
     try {
+      // Check if action matches expected cache creation action
+      if (!event.action.equals("cf-batch-cache-create")) {
+        logger.warn(s"Unexpected action for cache update: ${event.action}, expected: cf-batch-cache-create")
+        metrics.incCounter(config.failedEventCount)
+        return
+      }
       val cfId = Option(event.activityId).getOrElse("")
       val baseBatchId = Option(event.batchId).getOrElse("")
       if (cfId.nonEmpty && baseBatchId.nonEmpty) {

@@ -49,6 +49,10 @@ class CfEventRouter(config: CfBatchManagerConfig)
           logger.info(s"Routing to userEnrollment: batchId=${event.batchId} action=$action")
           context.output(config.userEnrollmentOutputTag, event)
           metrics.incCounter(config.processedEventCount)
+        case config.batchCacheCreateAction =>
+          logger.info(s"Routing to batchCache: batchId=${event.batchId} action=$action")
+          context.output(config.batchCacheOutputTag, event)
+          metrics.incCounter(config.processedEventCount)
         case _ =>
           logger.error(s"Unsupported action for mid=${event.mid()} batchId=${event.batchId} action=${action}")
           metrics.incCounter(config.failedEventCount)

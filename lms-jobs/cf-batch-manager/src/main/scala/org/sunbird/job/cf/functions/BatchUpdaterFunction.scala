@@ -122,7 +122,8 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
 
           createBatchesForHierarchy(cfBatchId, levelIds.toList, courseToLevel.toMap, examCourseIds.toSet, event)
           // Emit an event to trigger CF batch cache build in Redis
-          context.output(config.batchCacheOutputTag, event)
+          val cacheEvent = event.copy(action = "cf-batch-cache-create")
+          context.output(config.batchCacheOutputTag, cacheEvent)
           metrics.incCounter(config.processedEventCount)
         }
       }
