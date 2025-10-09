@@ -7,7 +7,6 @@ import org.sunbird.job.cf.domain.Event
 import org.sunbird.job.cf.task.CfBatchManagerConfig
 import org.sunbird.job.cf.util.{CFCacheUtil, EnrollmentApiUtil, HierarchyHelper}
 import org.sunbird.job.cf.util.CFCacheUtil.{CLNode, CLStructure}
-import org.sunbird.job.exception.InvalidEventException
 import org.sunbird.job.util.{CassandraUtil, HttpUtil}
 import org.sunbird.job.{BaseProcessFunction, Metrics}
 import org.sunbird.job.cache.{DataCache, RedisConnect}
@@ -29,18 +28,15 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
   private val clEnrollEndpoint = config.lmsBasePath + config.clEnrollRoute
   private val courseEnrollEndpoint = config.lmsBasePath + config.courseEnrollRoute
   private val redisEnabled = true
-  private val duplicateExamCheckDone = scala.collection.mutable.Set[String]()
   private val optionalCache = scala.collection.mutable.Map[String, Set[String]]()
   @transient private var userCourseStatusPs: PreparedStatement = _
   @transient private var updateOptionalPs: PreparedStatement = _
-  @transient private var assessmentAggPs: PreparedStatement = _
   @transient private var assessmentQuestionPs: PreparedStatement = _
+  @transient private var assessmentContentListPs: PreparedStatement = _
 
   // Cache key prefixes
   private val OE_KEY_PREFIX = "oe:"
   private val BCF_KEY_PREFIX = "bcf:"
-  private val EEMAP_COURSE_PREFIX = "eemap_course:"
-  private val EEMAP_CFCL_PREFIX = "eemap_cfcl:"
 
   // API endpoints
   private val searchUrl = config.searchBasePath + "/v3/search"
@@ -64,8 +60,8 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
     cfStatusMapPs = cassandraUtil.session.prepare(s"select statusmap, optional_collection from ${config.sbCollectionKeyspace}.${config.sbCollectionTable} where userid=? and activityid=? and activitytype='Competency Framework' and batchid=?")
     userCourseStatusPs = cassandraUtil.session.prepare(s"select status from ${config.userEnrollKeyspace}.${config.userEnrollTable} where userid=? and courseid=?")
     updateOptionalPs = cassandraUtil.session.prepare(s"update ${config.sbCollectionKeyspace}.${config.sbCollectionTable} set optional_collection=? where userid=? and activityid=? and activitytype='Competency Framework' and batchid=?")
-    assessmentAggPs = cassandraUtil.session.prepare(s"select total_max_score,total_score from ${config.assessmentAggKeyspace}.${config.assessmentAggTable} where course_id=? and batch_id=? and user_id=? and content_id=?")
-    assessmentQuestionPs = cassandraUtil.session.prepare(s"select question from ${config.assessmentAggKeyspace}.${config.assessmentAggTable} where course_id=? and batch_id=? and user_id=? and content_id=?")
+    assessmentQuestionPs = cassandraUtil.session.prepare(s"select question, last_attempted_on, updated_on, attempt_id from ${config.assessmentAggKeyspace}.${config.assessmentAggTable} where course_id=? and batch_id=? and user_id=? and content_id=?")
+    assessmentContentListPs = cassandraUtil.session.prepare(s"select content_id from ${config.assessmentAggKeyspace}.${config.assessmentAggTable} where course_id=? and batch_id=? and user_id=?")
     if (redisEnabled) {
       try {
         hierarchyCache = new DataCache(config, new RedisConnect(config), config.cfHierarchyRedisDb, Nil)
@@ -431,19 +427,51 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
     nextAction match {
       case NextEntranceExamCompleted(clId) =>
         enrollActivity("Competency Level", clId, baseBatch, users, s"phase=Progression startCLAfterEntranceExam")
-        // Explicitly avoiding re-enrollment of the same entrance exam here.
+        val nonOptionalQueue = scala.collection.mutable.ListBuffer[String]()
+        // Enroll optional courses for users who have them optional
         clStruct.courseIds.foreach { cid =>
           val optionalUsers = users.filter(u => isOptional(u, resolvedCfId, cfBatchId, cid))
           if (optionalUsers.nonEmpty) {
+            logger.info(s"EEOptional.EnrollOptional course=$cid optionalUsers=${optionalUsers.mkString(",")}")
             enrollActivity("Course", cid, baseBatch, optionalUsers, s"phase=Progression optionalCourseAfterEntranceExam cl=$clId")
+          }
+        }
+        // Determine first non-optional course for remaining users and enroll them
+        val remainingUsers = users.filter(u => clStruct.courseIds.exists(cid => !isOptional(u, resolvedCfId, cfBatchId, cid)))
+        if (remainingUsers.nonEmpty) {
+          val nextNonOptional = clStruct.courseIds.find(cid => remainingUsers.exists(u => !isOptional(u, resolvedCfId, cfBatchId, cid)))
+          nextNonOptional match {
+            case Some(cid) =>
+              val eligibleUsers = remainingUsers.filter(u => !isOptional(u, resolvedCfId, cfBatchId, cid))
+              logger.info(s"EEOptional.EnrollFirstNonOptional course=$cid eligibleUsers=${eligibleUsers.mkString(",")}")
+              if (eligibleUsers.nonEmpty) enrollActivity("Course", cid, baseBatch, eligibleUsers, s"phase=Progression firstNonOptionalAfterEntranceExam cl=$clId")
+            case None =>
+              logger.info(s"EEOptional.NoNonOptionalLeft cf=$resolvedCfId cl=$clId users=${users.mkString(",")} proceedingToLevelExamIfAny")
+              if (clStruct.levelExamId != null && clStruct.levelExamId.nonEmpty) {
+                enrollActivity("Course", clStruct.levelExamId, baseBatch, users, s"phase=Progression levelExamAfterEntranceExam cl=$clId allCoursesOptional")
+              }
+          }
+        } else {
+          logger.info(s"EEOptional.AllCoursesOptionalForUsers cf=$resolvedCfId cl=$clId users=${users.mkString(",")} proceedingToLevelExamIfAny")
+          if (clStruct.levelExamId != null && clStruct.levelExamId.nonEmpty) {
+            enrollActivity("Course", clStruct.levelExamId, baseBatch, users, s"phase=Progression levelExamAfterEntranceExam cl=$clId allCoursesOptional")
           }
         }
       case NextCourse(cid, clId) if users != null && users.nonEmpty =>
         val needUsers = strategy.filterUsersForCourse(cid, resolvedCfId, cfBatchId, users)
         if (needUsers.nonEmpty) {
           enrollCLIfTransition(clId)
+          // For Entrance Exam Based: also enroll optional courses (if any) in parallel for those users
+          if (strategy.isInstanceOf[EntranceExamBasedStrategy]) {
+            clStruct.courseIds.filter(_ != cid).foreach { optCid =>
+              val optionalUsers = needUsers.filter(u => isOptional(u, resolvedCfId, cfBatchId, optCid))
+              if (optionalUsers.nonEmpty) {
+                logger.info(s"EEOptional.EnrollParallelOptional baseCourse=$cid optionalCourse=$optCid users=${optionalUsers.mkString(",")}")
+                enrollActivity("Course", optCid, baseBatch, optionalUsers, s"phase=Progression optionalInParallel baseCourse=$cid cl=$clId")
+              }
+            }
+          }
           enrollActivity("Course", cid, baseBatch, needUsers, s"phase=Progression next=Course cl=$clId from=${event.courseId} strategy=${strategy.name}")
-          // Entrance Exam Based enhancement: if this course is optional (due to entrance exam performance) immediately enroll level exam for those users
           if (strategy.isInstanceOf[EntranceExamBasedStrategy] && clStruct.levelExamId != null && clStruct.levelExamId.nonEmpty) {
             val optionalUsers = needUsers.filter(u => isOptional(u, resolvedCfId, cfBatchId, cid))
             if (optionalUsers.nonEmpty) {
@@ -460,12 +488,46 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
     }
   }
 
+  private def fetchAssessmentRow(courseId: String, batchId: String, userId: String, contentId: String, attempts: Int = 3, delayMs: Long = 800): com.datastax.driver.core.Row = {
+    val altBatch = normalizeBatchId(batchId)
+    var i = 0
+    var row: com.datastax.driver.core.Row = null
+    while (i < attempts && row == null) {
+      try {
+        logger.info(s"CQLExecute try=${i+1}/$attempts query='${assessmentQuestionPs.getQueryString}' values=[$courseId,$batchId,$userId,$contentId]")
+        val rs = withRetry(cassandraUtil.session.execute(assessmentQuestionPs.bind(courseId, batchId, userId, contentId)))
+        row = rs.one()
+        if (row == null && altBatch != null && altBatch.nonEmpty && altBatch != batchId) {
+          logger.info(s"CQLExecute alt try=${i+1}/$attempts query='${assessmentQuestionPs.getQueryString}' values=[$courseId,$altBatch,$userId,$contentId]")
+          val rsAlt = withRetry(cassandraUtil.session.execute(assessmentQuestionPs.bind(courseId, altBatch, userId, contentId)))
+          row = rsAlt.one()
+        }
+        if (row == null) {
+          logger.info(s"AssessmentRowNotFound try=${i+1}/$attempts course=$courseId batch=$batchId altBatch=$altBatch user=$userId content=$contentId sleepingMs=$delayMs")
+          Thread.sleep(delayMs)
+        }
+      } catch {
+        case ex: Exception =>
+          logger.warn(s"AssessmentRowFetchError try=${i+1}/$attempts course=$courseId batch=$batchId user=$userId content=$contentId", ex)
+          Thread.sleep(delayMs)
+      }
+      i += 1
+    }
+    if (row == null) {
+      val providedIds = listAvailableContentIds(courseId, batchId, userId)
+      logger.info(s"AssessmentRowMissingFinal course=$courseId batch=$batchId user=$userId probeContentIds=${providedIds.mkString(",")}")
+      if (altBatch != null && altBatch.nonEmpty && altBatch != batchId) {
+        val altIds = listAvailableContentIds(courseId, altBatch, userId)
+        logger.info(s"AssessmentRowMissingFinalAlt course=$courseId altBatch=$altBatch user=$userId probeContentIds=${altIds.mkString(",")}")
+      }
+    }
+    row
+  }
+
   private def getQuestionIdsForContent(courseId: String, batchId: String, userId: String, contentId: String): List[String] = {
     logger.info(s"QFetchStart course=$courseId batch=$batchId user=$userId content=$contentId")
     try {
-      logger.info(s"CQLExecute query='${assessmentQuestionPs.getQueryString}' values=[$courseId,$batchId,$userId,$contentId]")
-      val rs = withRetry(cassandraUtil.session.execute(assessmentQuestionPs.bind(courseId, batchId, userId, contentId)))
-      val row = rs.one()
+      val row = fetchAssessmentRow(courseId, batchId, userId, contentId)
       if (row != null && !row.isNull("question")) {
         logger.info(s"QFetchRowFound course=$courseId batch=$batchId user=$userId content=$contentId")
         val entries = extractQuestionEntries(row)
@@ -482,21 +544,19 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
   private def contentScorePercent(courseId: String, batchId: String, userId: String, contentId: String): Map[String, Double] = {
     logger.info(s"ScoreCalcStart course=$courseId batch=$batchId user=$userId content=$contentId")
     try {
-      logger.info(s"CQLExecute query='${assessmentQuestionPs.getQueryString}' values=[$courseId,$batchId,$userId,$contentId]")
-      val rs = withRetry(cassandraUtil.session.execute(assessmentQuestionPs.bind(courseId, batchId, userId, contentId)))
-      val row = rs.one()
+      val row = fetchAssessmentRow(courseId, batchId, userId, contentId)
       if (row != null && !row.isNull("question")) {
         val entries = extractQuestionEntries(row)
         logger.info(s"ScoreEntriesFound course=$courseId batch=$batchId user=$userId content=$contentId entries=${entries.size}")
         val scores = entries.flatMap { m =>
           val qId = m.get("id").map(_.toString).getOrElse("")
-            if (qId.nonEmpty) {
-              val scoreD = try { m.get("score").map(_.toString.toDouble).getOrElse(0.0) } catch { case _: Exception => 0.0 }
-              val maxD = try { m.get("max_score").map(_.toString.toDouble).getOrElse(0.0) } catch { case _: Exception => 0.0 }
-              val pct = if (maxD > 0) (scoreD / maxD) * 100 else 0.0
-              logger.info(s"ScoreCalc qId=$qId rawScore=$scoreD max=$maxD pct=$pct threshold=${config.entranceExamOptionalThreshold}")
-              Some(qId -> pct)
-            } else None
+          if (qId.nonEmpty) {
+            val scoreD = try { m.get("score").map(_.toString.toDouble).getOrElse(0.0) } catch { case _: Exception => 0.0 }
+            val maxD = try { m.get("max_score").map(_.toString.toDouble).getOrElse(0.0) } catch { case _: Exception => 0.0 }
+            val pct = if (maxD > 0) (scoreD / maxD) * 100 else 0.0
+            logger.info(s"ScoreCalc qId=$qId rawScore=$scoreD max=$maxD pct=$pct threshold=${config.entranceExamOptionalThreshold}")
+            Some(qId -> pct)
+          } else None
         }.toMap
         logger.info(s"ScoreCalcResult course=$courseId content=$contentId scores=${scores.map{case(k,v)=>s"$k:$v"}.mkString(",")}")
         scores
@@ -505,6 +565,16 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
         Map.empty[String, Double]
       }
     } catch { case ex: Exception => logger.warn(s"ContentScorePercentFailed course=$courseId batch=$batchId user=$userId content=$contentId", ex); Map.empty[String, Double] }
+  }
+
+  private def listAvailableContentIds(courseId: String, batchId: String, userId: String): List[String] = {
+    try {
+      logger.info(s"CQLExecute query='${assessmentContentListPs.getQueryString}' values=[$courseId,$batchId,$userId]")
+      val rs = withRetry(cassandraUtil.session.execute(assessmentContentListPs.bind(courseId, batchId, userId)))
+      val ids = rs.all().asScala.map(r => if (!r.isNull("content_id")) r.getString("content_id") else "").filter(_.nonEmpty).toList
+      logger.info(s"PartitionContentIds course=$courseId batch=$batchId user=$userId count=${ids.size} ids=${ids.mkString(",")}")
+      ids
+    } catch { case ex: Exception => logger.warn(s"PartitionContentIdsFailed course=$courseId batch=$batchId user=$userId", ex); Nil }
   }
 
   private def extractQuestionEntries(row: com.datastax.driver.core.Row): List[Map[String, Any]] = {
@@ -525,6 +595,14 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
                 val maxScore = Option(json.get("max_score")).map(_.asText()).getOrElse(Option(json.get("max_score")).map(_.toString).getOrElse(""))
                 Some(Map("id" -> id, "score" -> score, "max_score" -> maxScore))
               } catch { case _: Exception => None }
+            case udt: com.datastax.driver.core.UDTValue =>
+              // Handle UDT question elements: pick common field aliases
+              def getObj(name: String): Option[AnyRef] = try { if (!udt.isNull(name)) Option(udt.getObject(name)) else None } catch { case _: IllegalArgumentException => None }
+              def pick(names: List[String]): Option[AnyRef] = names.view.flatMap(getObj).headOption
+              val id = pick(List("id", "question_id", "qid", "item_id")).map(_.toString).getOrElse("")
+              val score = pick(List("score", "total_score", "obtained_score", "marks", "score_obtained")).map(_.toString).getOrElse("0")
+              val maxScore = pick(List("max_score", "maxscore", "total_max_score", "maxMarks", "max_marks")).map(_.toString).getOrElse("0")
+              Some(Map("id" -> id, "score" -> score, "max_score" -> maxScore))
             case other =>
               logger.warn(s"UnknownQuestionElementType type=${other.getClass.getName}")
               None
@@ -770,112 +848,6 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
         Nil
       }
     } catch { case ex: Exception => logger.warn(s"OEApiFailed questionId=$questionId", ex); Nil }
-  }
-
-  private def extractObservableElementMapping(courseId: String, batchId: String, userId: String, root: java.util.Map[String, AnyRef]): (Map[String, List[String]], Map[String, String]) = {
-    val contentIds = extractContentIds(root)
-    logger.info(s"ExtractObservableElementMapping course=$courseId batch=$batchId user=$userId contentIds=${contentIds.mkString(",")}")
-    val result = scala.collection.mutable.Map[String, List[String]]()
-    val qToContent = scala.collection.mutable.Map[String, String]()
-    contentIds.foreach { contentId =>
-      val qIds = getQuestionIdsForContent(courseId, batchId, userId, contentId)
-      logger.info(s"ContentQuestions course=$courseId content=$contentId questions=${qIds.mkString(",")}")
-      qIds.foreach { qId =>
-        val obs = getObservableElements(qId)
-        logger.info(s"QuestionObservables question=$qId observables=${obs.mkString(",")}")
-        if (obs.nonEmpty) {
-          result.put(qId, obs)
-          qToContent.put(qId, contentId)
-        }
-      }
-    }
-    logger.info(s"ObservableElementMappingBuilt course=$courseId size=${result.size} qToContentSize=${qToContent.size}")
-    (result.toMap, qToContent.toMap)
-  }
-
-  private def ensureEntranceExamMappings(cfId: String, clId: String, entranceExamId: String, batchId: String, userId: String): Unit = {
-    if (hierarchyCache == null || cfId == null || cfId.isEmpty || clId == null || clId.isEmpty || entranceExamId == null || entranceExamId.isEmpty || batchId == null || batchId.isEmpty || userId == null || userId.isEmpty) return
-    val courseKey = s"$EEMAP_COURSE_PREFIX$entranceExamId"
-    val clKey = s"$EEMAP_CFCL_PREFIX$cfId:$clId"
-    def cacheMissing(k: String): Boolean = {
-      try { val m = hierarchyCache.getWithRetry(k); m == null || m.isEmpty } catch { case _: Exception => true }
-    }
-    val buildCourse = cacheMissing(courseKey)
-    val buildCl = cacheMissing(clKey)
-    logger.info(s"EnsureEntranceExamMappings cf=$cfId cl=$clId entranceExam=$entranceExamId user=$userId buildCourse=$buildCourse buildCl=$buildCl")
-    if (!buildCourse && !buildCl) return
-    def toJsonArray(list: List[String]) = list.map(v => "\"" + v + "\"").mkString("[", ",", "]")
-    def mappingJson(map: Map[String, List[String]]) = map.map { case (k, v) => "\"" + k + "\":" + toJsonArray(v) }.mkString(",")
-    def qToContentJson(map: Map[String, String]) = map.map { case (k, v) => "\"" + k + "\":\"" + v + "\"" }.mkString(",")
-    try {
-      if (buildCourse) {
-        val courseHierarchy = hierarchyHelper.getHierarchy(entranceExamId)
-        val (map, qToContent) = extractObservableElementMapping(entranceExamId, batchId, userId, courseHierarchy)
-        val json = mappingJson(map)
-        val qJson = qToContentJson(qToContent)
-        val value = "{\"courseId\":\"" + entranceExamId + "\",\"mapping\":{" + json + "},\"qToContent\":{" + qJson + "}}"
-        hierarchyCache.setWithRetry(courseKey, value)
-        logger.info(s"EntranceExamCourseObservableMapStored course=$entranceExamId size=${map.size}")
-      }
-    } catch { case ex: Exception => logger.warn(s"EntranceExamCourseObservableMapFailed course=$entranceExamId", ex) }
-    try {
-      if (buildCl) {
-        val cfHierarchy = hierarchyHelper.getHierarchy(cfId)
-        val clNodeOpt = Option(cfHierarchy.get("children").asInstanceOf[java.util.List[java.util.Map[String, AnyRef]]]).getOrElse(java.util.Collections.emptyList()).asScala.find { c => Option(c.get("identifier")).exists(_.toString == clId) }
-        clNodeOpt.foreach { clNode =>
-            val (map, qToContent) = extractObservableElementMapping(entranceExamId, batchId, userId, clNode)
-            val json = mappingJson(map)
-            val qJson = qToContentJson(qToContent)
-            val value = "{\"cfId\":\"" + cfId + "\",\"clId\":\"" + clId + "\",\"mapping\":{" + json + "},\"qToContent\":{" + qJson + "}}"
-            hierarchyCache.setWithRetry(clKey, value)
-            logger.info(s"EntranceExamCFCLObservableMapStored cf=$cfId cl=$clId size=${map.size}")
-        }
-      }
-    } catch { case ex: Exception => logger.warn(s"EntranceExamCFCLObservableMapFailed cf=$cfId cl=$clId", ex) }
-  }
-
-  private def loadEntranceMappingsFromCache(entranceExamCourseId: String, cfId: String, clId: String): (Map[String, List[String]], Map[String, String], Map[String, List[String]], Map[String, String]) = {
-    if (hierarchyCache == null) {
-      logger.warn(s"HierarchyCacheNull cannot load entrance mappings")
-      return (Map.empty, Map.empty, Map.empty, Map.empty)
-    }
-    def read(key: String): (Map[String, List[String]], Map[String, String]) = {
-      try {
-        val m = hierarchyCache.getWithRetry(key)
-        if (m == null || m.isEmpty) {
-          logger.info(s"CacheMiss key=$key")
-          return (Map.empty, Map.empty)
-        }
-        logger.info(s"CacheHit key=$key")
-        val mapping = m.get("mapping") match {
-          case Some(jm: java.util.Map[_, _]) =>
-            jm.asScala.collect {
-              case (k: String, v: java.util.List[_]) => k -> v.asScala.toList.map(_.toString).filter(_.nonEmpty)
-            }.toMap[String, List[String]]
-          case Some(sm: scala.collection.Map[_, _]) =>
-            sm.collect {
-              case (k: String, v: java.util.List[_]) => k -> v.asScala.toList.map(_.toString).filter(_.nonEmpty)
-              case (k: String, v: List[_]) => k -> v.map(_.toString).filter(_.nonEmpty)
-            }.toMap[String, List[String]]
-          case _ => Map.empty[String, List[String]]
-        }
-        val qToContent = m.get("qToContent") match {
-          case Some(jm: java.util.Map[_, _]) =>
-            jm.asScala.collect {
-              case (k: String, v: String) => k -> v
-            }.toMap[String, String]
-          case _ => Map.empty[String, String]
-        }
-        logger.info(s"MappingLoaded key=$key mappingSize=${mapping.size} qToContentSize=${qToContent.size}")
-        (mapping, qToContent)
-      } catch { case _: Exception => (Map.empty, Map.empty) }
-    }
-    val courseKey = s"$EEMAP_COURSE_PREFIX$entranceExamCourseId"
-    val clKey = s"$EEMAP_CFCL_PREFIX$cfId:$clId"
-    val (courseMap, courseQToContent) = read(courseKey)
-    val (clMap, clQToContent) = read(clKey)
-    logger.info(s"EntranceMappingsLoaded entranceExam=$entranceExamCourseId cf=$cfId cl=$clId courseMapSize=${courseMap.size} clMapSize=${clMap.size}")
-    (courseMap, courseQToContent, clMap, clQToContent)
   }
 
   private def warnDuplicateExamIds(cfId: String, structures: Map[String, CLStructure]): Unit = {
