@@ -46,13 +46,37 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig)
             try {
                 // Fetch user enrolments where status is 2 and extract fields
                 val userEnrolments: List[Map[String, AnyRef]] = fetchUserEnrolments(event.userId, metrics)
-                
                 logger.info("Fetched and extracted {} user enrolment records for userId: {} with status = 2", 
                            userEnrolments.size, event.userId)
                 
-                // TODO: Implement aggregation logic for CF progress
-                logger.info("TODO: Implement aggregation logic for userId: {}, activityId: {}, batchId: {}", 
-                           event.userId, event.activityId, event.batchId)
+                // Extract batchIds completed by the user
+                val completedBatchIds: Set[String] = userEnrolments.map(enrolment => 
+                    enrolment.getOrElse("batchid", "").toString
+                ).filter(_.nonEmpty).toSet
+                
+                logger.info("User {} has completed {} batches: {}", 
+                           event.userId, completedBatchIds.size.asInstanceOf[Object], completedBatchIds.mkString(", "))
+                
+                val ancestors = readFromCache(key = s"${event.batchId}-${config.ancestors}", metrics)
+                if (ancestors.nonEmpty) {
+                    ancestors.foreach(parentId => {
+                        val leafNodeIds = readFromCache(key = s"${parentId}-${config.leafNodes}", metrics)
+                        if (leafNodeIds == null || leafNodeIds.isEmpty) {
+                            throw new RuntimeException(s"Cache missing or empty for key: ${parentId}-${config.leafNodes}. ParentId ${parentId} must have leafNodeIds.")
+                        }
+                        
+                        // Compute intersection of leafNodeIds and completed batchIds
+                        val leafNodeIdSet = leafNodeIds.toSet
+                        val completedBatchIdsForParent = leafNodeIdSet.intersect(completedBatchIds).toList
+                        val completedCount = completedBatchIdsForParent.size
+                        val totalCount = leafNodeIdSet.size
+                        val progressPercentage = if (totalCount > 0) (completedCount * 100.0 / totalCount) else 0.0
+                        
+                        logger.info("ParentId: {} | Total leafNodes: {} | Completed: {} | Progress: {}% | Completed batchIds: {}", 
+                                   parentId, totalCount.asInstanceOf[Object], completedCount.asInstanceOf[Object], 
+                                   progressPercentage.asInstanceOf[Object], completedBatchIdsForParent.mkString(", "))
+                    })
+                }
                 metrics.incCounter(config.successEventCount)
             } catch {
                 case e: Exception => {

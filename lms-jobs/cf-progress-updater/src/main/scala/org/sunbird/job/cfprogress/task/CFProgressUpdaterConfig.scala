@@ -45,4 +45,8 @@ class CFProgressUpdaterConfig(override val config: Config) extends BaseJobConfig
   // Redis Configurations
   val nodeStore: Int = config.getInt("redis.database.relationCache.id")
 
+  // Constants for cache keys
+  val leafNodes = "leafnodes"
+  val ancestors = "ancestors"
+
 }
