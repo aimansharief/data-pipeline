@@ -43,6 +43,10 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   val userEnrollmentOutputTagName = s"cf-batch-mgr-ue"
   val userEnrollmentOutputTag: OutputTag[Event] = new OutputTag[Event](userEnrollmentOutputTagName)
 
+  // Custom: CF batch cache side-output to trigger cache build in Redis
+  val batchCacheOutputTagName = "cf-batch-cache"
+  val batchCacheOutputTag: OutputTag[Event] = new OutputTag[Event](batchCacheOutputTagName)
+
   // constants
   val batchId = "batchId"
   val userId = "userId"

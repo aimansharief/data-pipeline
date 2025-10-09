@@ -61,6 +61,12 @@ class CfBatchManagerStreamTask(config: CfBatchManagerConfig, kafkaConnector: Fli
     batchUpdateStream.getSideOutput(config.failedEventOutputTag).addSink(kafkaConnector.kafkaStringSink(config.kafkaFailedEventTopic))
       .name(config.cfBatchManagerFailedEventProducer).uid(config.cfBatchManagerFailedEventProducer)
 
+    // Trigger CF batch cache builder from BatchUpdater side-output
+    batchUpdateStream.getSideOutput(config.batchCacheOutputTag)
+      .process(new org.sunbird.job.cf.functions.CFBatchCacheUpdate(config))
+      .name("cf-batch-cache-fn").uid("cf-batch-cache-fn")
+      .setParallelism(config.batchUpdaterParallelism)
+
     userEnrollmentStream.getSideOutput(config.auditEventOutputTag).addSink(kafkaConnector.kafkaStringSink(config.kafkaAuditEventTopic))
       .name("user-enrollment-audit-producer").uid("user-enrollment-audit-producer")
     userEnrollmentStream.getSideOutput(config.failedEventOutputTag).addSink(kafkaConnector.kafkaStringSink(config.kafkaFailedEventTopic))
