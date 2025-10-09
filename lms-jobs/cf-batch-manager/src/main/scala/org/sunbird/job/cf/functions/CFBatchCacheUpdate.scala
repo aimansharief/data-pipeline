@@ -101,7 +101,8 @@ class CFBatchCacheUpdate(config: CfBatchManagerConfig)
             .map(_.getOrDefault("identifier", "").asInstanceOf[String])
             .filter(id => id != null && id.nonEmpty)
             .toList
-          val ancestorValues = List(s"$baseBatchId:$clId", s"$baseBatchId:$cfId")
+          // Ancestors per course: include CL and CF-as-batch (no cfId)
+          val ancestorValues = List(s"$baseBatchId:$clId", s"$baseBatchId")
           courseIds.foreach { cid => result.put(cid, ancestorValues) }
         }
       }
