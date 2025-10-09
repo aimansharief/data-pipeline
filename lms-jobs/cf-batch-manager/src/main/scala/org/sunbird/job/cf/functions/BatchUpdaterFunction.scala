@@ -121,6 +121,8 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
           logger.info(s"Course->Level: ${courseToLevel.toMap} examCourses=${examCourseIds.mkString(",")}")
 
           createBatchesForHierarchy(cfBatchId, levelIds.toList, courseToLevel.toMap, examCourseIds.toSet, event)
+          // Emit an event to trigger CF batch cache build in Redis
+          context.output(config.batchCacheOutputTag, event)
           metrics.incCounter(config.processedEventCount)
         }
       }
