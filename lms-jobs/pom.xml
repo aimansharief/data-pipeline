@@ -16,7 +16,7 @@
         <module>activity-aggregate-updater</module>
         <module>credential-generator</module>
         <module>enrolment-reconciliation</module>
-        <module>merge-user-courses</module>
+        <!-- <module>merge-user-courses</module> -->
         <module>assessment-aggregator</module>
         <module>cf-batch-manager</module>
         <module>cf-progress-updater</module>

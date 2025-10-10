@@ -52,18 +52,6 @@
         </dependency>
         <dependency>
             <groupId>org.sunbird</groupId>
-            <artifactId>legacy-certificate-migrator</artifactId>
-            <version>1.0.0</version>
-            <type>jar</type>
-        </dependency>
-        <dependency>
-            <groupId>org.sunbird</groupId>
-            <artifactId>merge-user-courses</artifactId>
-            <version>1.0.0</version>
-            <type>jar</type>
-        </dependency>
-        <dependency>
-            <groupId>org.sunbird</groupId>
             <artifactId>assessment-aggregator</artifactId>
             <version>1.0.0</version>
             <type>jar</type>
@@ -78,24 +66,6 @@
             <groupId>org.sunbird</groupId>
             <artifactId>user-cache-updater-2.0</artifactId>
             <version>2.0.0</version>
-            <type>jar</type>
-        </dependency>
-        <dependency>
-            <groupId>org.sunbird</groupId>
-            <artifactId>program-user-info</artifactId>
-            <version>1.0.0</version>
-            <type>jar</type>
-        </dependency>
-        <dependency>
-            <groupId>org.sunbird</groupId>
-            <artifactId>user-deletion-cleanup</artifactId>
-            <version>1.0.0</version>
-            <type>jar</type>
-        </dependency>
-        <dependency>
-            <groupId>org.sunbird</groupId>
-            <artifactId>ml-user-delete</artifactId>
-            <version>1.0.0</version>
             <type>jar</type>
         </dependency>
         <dependency>
