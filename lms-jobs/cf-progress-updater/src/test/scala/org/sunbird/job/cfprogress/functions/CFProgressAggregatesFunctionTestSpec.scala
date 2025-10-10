@@ -20,10 +20,17 @@ class CFProgressAggregatesFunctionTestSpec extends BaseTestSpec {
   implicit val stringTypeInfo: TypeInformation[String] = TypeExtractor.getForClass(classOf[String])
   val config: Config = ConfigFactory.load("test.conf")
   val jobConfig: CFProgressUpdaterConfig = new CFProgressUpdaterConfig(config)
+  
+  private def setCassandraUtil(function: CFProgressAggregatesFunction, cassandraUtil: CassandraUtil): Unit = {
+    val field = function.getClass.getDeclaredField("cassandraUtil")
+    field.setAccessible(true)
+    field.set(function, cassandraUtil)
+  }
 
   "CFProgressAggregatesFunction" should "process valid event successfully" in {
     val mockCassandraUtil = mock[CassandraUtil]
-    val cfProgressAggregatesFunction = new CFProgressAggregatesFunction(jobConfig)(stringTypeInfo, mockCassandraUtil)
+    val cfProgressAggregatesFunction = new CFProgressAggregatesFunction(jobConfig)
+    setCassandraUtil(cfProgressAggregatesFunction, mockCassandraUtil)
     val mockContext = mock[ProcessFunction[Event, String]#Context]
     val mockMetrics = mock[org.sunbird.job.Metrics]
 
@@ -39,7 +46,8 @@ class CFProgressAggregatesFunctionTestSpec extends BaseTestSpec {
 
   "CFProgressAggregatesFunction" should "skip invalid event" in {
     val mockCassandraUtil = mock[CassandraUtil]
-    val cfProgressAggregatesFunction = new CFProgressAggregatesFunction(jobConfig)(stringTypeInfo, mockCassandraUtil)
+    val cfProgressAggregatesFunction = new CFProgressAggregatesFunction(jobConfig)
+    setCassandraUtil(cfProgressAggregatesFunction, mockCassandraUtil)
     val mockContext = mock[ProcessFunction[Event, String]#Context]
     val mockMetrics = mock[org.sunbird.job.Metrics]
 
@@ -55,8 +63,7 @@ class CFProgressAggregatesFunctionTestSpec extends BaseTestSpec {
 
 
   "CFProgressAggregatesFunction" should "return correct metrics list" in {
-    val mockCassandraUtil = mock[CassandraUtil]
-    val cfProgressAggregatesFunction = new CFProgressAggregatesFunction(jobConfig)(stringTypeInfo, mockCassandraUtil)
+    val cfProgressAggregatesFunction = new CFProgressAggregatesFunction(jobConfig)
 
     val metricsList = cfProgressAggregatesFunction.metricsList()
 
@@ -65,12 +72,13 @@ class CFProgressAggregatesFunctionTestSpec extends BaseTestSpec {
     metricsList should contain(jobConfig.skippedEventCount)
     metricsList should contain(jobConfig.totalEventsCount)
     metricsList should contain(jobConfig.dbWriteCount)
-    metricsList.size should be(5)
+    metricsList.size should be(8)
   }
 
   "CFProgressAggregatesFunction" should "handle close lifecycle method" in {
     val mockCassandraUtil = mock[CassandraUtil]
-    val cfProgressAggregatesFunction = new CFProgressAggregatesFunction(jobConfig)(stringTypeInfo, mockCassandraUtil)
+    val cfProgressAggregatesFunction = new CFProgressAggregatesFunction(jobConfig)
+    setCassandraUtil(cfProgressAggregatesFunction, mockCassandraUtil)
 
     // Test close method
     cfProgressAggregatesFunction.close()
@@ -79,7 +87,8 @@ class CFProgressAggregatesFunctionTestSpec extends BaseTestSpec {
 
   "CFProgressAggregatesFunction" should "process cf-progress-update action" in {
     val mockCassandraUtil = mock[CassandraUtil]
-    val cfProgressAggregatesFunction = new CFProgressAggregatesFunction(jobConfig)(stringTypeInfo, mockCassandraUtil)
+    val cfProgressAggregatesFunction = new CFProgressAggregatesFunction(jobConfig)
+    setCassandraUtil(cfProgressAggregatesFunction, mockCassandraUtil)
     val mockContext = mock[ProcessFunction[Event, String]#Context]
     val mockMetrics = mock[org.sunbird.job.Metrics]
 

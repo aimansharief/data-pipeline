@@ -13,8 +13,8 @@ class CFProgressUpdaterConfigTestSpec extends BaseTestSpec {
     jobConfig.kafkaInputTopic should be("flink.cf.progress.input")
     jobConfig.kafkaConsumerParallelism should be(1)
     jobConfig.parallelism should be(2)
-    jobConfig.dbKeyspace should be("cf_progress")
-    jobConfig.dbTable should be("user_cf_progress")
+    // jobConfig.dbKeyspace should be("cf_progress")
+    // jobConfig.dbTable should be("user_cf_progress")
     jobConfig.dbHost should be("localhost")
     jobConfig.dbPort should be(9142)
   }

@@ -24,6 +24,7 @@ class CFProgressUpdaterConfig(override val config: Config) extends BaseJobConfig
   val failedEventCount = "failed-events-count"
   val skippedEventCount = "skipped-event-count"
   val dbWriteCount = "db-write-count"
+  val dbUpdateCount = "db-update-count"
   val dbReadCount = "db-read-count"
   val cacheHitCount = "cache-hit-count"
   val cacheMissCount = "cache-miss-count"
@@ -32,8 +33,6 @@ class CFProgressUpdaterConfig(override val config: Config) extends BaseJobConfig
   val cfProgressConsumer = "cf-progress-consumer"
 
   // Cassandra Configurations
-  val dbTable: String = config.getString("lms-cassandra.table")
-  val dbKeyspace: String = config.getString("lms-cassandra.keyspace")
   val dbHost: String = config.getString("lms-cassandra.host")
   val dbPort: Int = config.getInt("lms-cassandra.port")
   val progressPrimaryKey: List[String] = List("userId", "activityId", "batchId")
@@ -41,6 +40,9 @@ class CFProgressUpdaterConfig(override val config: Config) extends BaseJobConfig
   // User Enrolments Configuration
   val courseKeyspace: String = if (config.hasPath("course-cassandra.keyspace")) config.getString("course-cassandra.keyspace") else "sunbird_courses"
   val courseEnrolmentsTable: String = if (config.hasPath("course-cassandra.user-enrolments.table")) config.getString("course-cassandra.user-enrolments.table") else "user_enrolments"
+  val collectionTrackingKeyspace: String = if (config.hasPath("collection-tracking-cassandra.keyspace")) config.getString("collection-tracking-cassandra.keyspace") else "sb_collection_tracking"
+  val collectionEnrolmentsTable: String = if (config.hasPath("collection-tracking-cassandra.user-enrolments.table")) config.getString("collection-tracking-cassandra.user-enrolments.table") else "user_enrolments"
+  val batchesByIdTable: String = if (config.hasPath("collection-tracking-cassandra.batches-by-id.table")) config.getString("collection-tracking-cassandra.batches-by-id.table") else "batches_by_id"
 
   // Redis Configurations
   val nodeStore: Int = config.getInt("redis.database.relationCache.id")
@@ -48,5 +50,13 @@ class CFProgressUpdaterConfig(override val config: Config) extends BaseJobConfig
   // Constants for cache keys
   val leafNodes = "leafnodes"
   val ancestors = "ancestors"
+
+  // Batch write configuration
+  val thresholdBatchWriteSize: Int = if (config.hasPath("threshold.batch.write.size")) config.getInt("threshold.batch.write.size") else 10
+  val enableParentProgressUpdate: Boolean = if (config.hasPath("enable.parent.progress.update")) config.getBoolean("enable.parent.progress.update") else false
+
+  // Hardcoded values for parent progress tracking
+  val parentActivityId: String = "collection-framework"
+  val parentActivityType: String = "CollectionFramework"
 
 }

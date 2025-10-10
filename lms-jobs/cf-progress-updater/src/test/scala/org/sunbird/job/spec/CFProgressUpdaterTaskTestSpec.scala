@@ -78,7 +78,7 @@ class CFProgressUpdaterTaskTestSpec extends BaseTestSpec {
     BaseMetricsReporter.gaugeMetrics(s"${jobConfig.jobName}.${jobConfig.dbWriteCount}").getValue() should be(2)
 
     // Verify data was written to Cassandra
-    val selectQuery = s"SELECT * FROM ${jobConfig.dbKeyspace}.${jobConfig.dbTable} WHERE userId = 'user123' AND activityId = 'activity456' AND batchId = 'batch789'"
+    val selectQuery = s"SELECT * FROM ${jobConfig.courseKeyspace}.${jobConfig.courseEnrolmentsTable} WHERE userId = 'user123' AND activityId = 'activity456' AND batchId = 'batch789'"
     val rows = cassandraUtil.find(selectQuery)
     rows.size() should be(1)
     val row = rows.get(0)
