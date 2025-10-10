@@ -34,12 +34,37 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
   @transient private var assessmentQuestionPs: PreparedStatement = _
   @transient private var assessmentContentListPs: PreparedStatement = _
 
-  // Cache key prefixes
   private val OE_KEY_PREFIX = "oe:"
   private val BCF_KEY_PREFIX = "bcf:"
 
-  // API endpoints
   private val searchUrl = config.searchBasePath + "/v3/search"
+
+  private def mergeAndPersistOptional(userId: String, cfId: String, baseBatch: String, newOptionals: Set[String]): Set[String] = {
+    if (newOptionals == null || newOptionals.isEmpty) return optionalCache.getOrElse(optKey(userId, cfId, baseBatch), Set.empty)
+    val key = optKey(userId, cfId, baseBatch)
+    val existing = optionalCache.getOrElse(key, {
+      val (_, opt) = fetchCfStatusAndOptional(userId, cfId, baseBatch)
+      opt
+    })
+    val merged = existing ++ newOptionals
+    if (merged != existing) {
+      try {
+        val encoded: java.util.List[String] = new java.util.ArrayList[String](
+          merged.toList.map(cid => batchId(baseBatch, cid)).asJava
+        )
+        logger.info(s"CQLExecute query='${updateOptionalPs.getQueryString}' values=[${merged.mkString("|")},$userId,$cfId,$baseBatch]")
+        val rs = cassandraUtil.session.execute(updateOptionalPs.bind(encoded, userId, cfId, baseBatch))
+        val applied = try { rs.wasApplied() } catch { case _: Throwable => true }
+        if (applied) {
+          optionalCache.put(key, merged)
+          logger.info(s"OptionalPersisted user=$userId cf=$cfId baseBatch=$baseBatch count=${merged.size} list=${merged.mkString(",")}")
+        } else {
+          logger.warn(s"OptionalUpdateNotApplied (row missing) user=$userId cf=$cfId baseBatch=$baseBatch skippingCacheUpdate")
+        }
+      } catch { case ex: Exception => logger.error(s"OptionalPersistFailed user=$userId cf=$cfId baseBatch=$baseBatch list=${merged.mkString(",")}", ex) }
+    }
+    merged
+  }
 
   private def batchId(base: String, id: String) = EnrollmentApiUtil.generateBatchId(base, id)
   private def enrollActivity(activityType: String, activityId: String, baseBatch: String, users: List[String], note: String): Unit = {
@@ -57,9 +82,9 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
     cassandraUtil = new CassandraUtil(config.dbHost, config.dbPort, config.isMultiDCEnabled)
     hierarchyHelper = new HierarchyHelper(cassandraUtil, config.dbKeyspace, config.dbTable)
     objectMapper = new com.fasterxml.jackson.databind.ObjectMapper()
-    cfStatusMapPs = cassandraUtil.session.prepare(s"select statusmap, optional_collection from ${config.sbCollectionKeyspace}.${config.sbCollectionTable} where userid=? and activityid=? and activitytype='Competency Framework' and batchid=?")
+    cfStatusMapPs = cassandraUtil.session.prepare(s"select statusmap, optional_batches from ${config.sbCollectionKeyspace}.${config.sbCollectionTable} where userid=? and activityid=? and activitytype='Competency Framework' and batchid=?")
     userCourseStatusPs = cassandraUtil.session.prepare(s"select status from ${config.userEnrollKeyspace}.${config.userEnrollTable} where userid=? and courseid=?")
-    updateOptionalPs = cassandraUtil.session.prepare(s"update ${config.sbCollectionKeyspace}.${config.sbCollectionTable} set optional_collection=? where userid=? and activityid=? and activitytype='Competency Framework' and batchid=?")
+    updateOptionalPs = cassandraUtil.session.prepare(s"update ${config.sbCollectionKeyspace}.${config.sbCollectionTable} set optional_batches=? where userid=? and activityid=? and activitytype='Competency Framework' and batchid=? IF EXISTS")
     assessmentQuestionPs = cassandraUtil.session.prepare(s"select question, last_attempted_on, updated_on, attempt_id from ${config.assessmentAggKeyspace}.${config.assessmentAggTable} where course_id=? and batch_id=? and user_id=? and content_id=?")
     assessmentContentListPs = cassandraUtil.session.prepare(s"select content_id from ${config.assessmentAggKeyspace}.${config.assessmentAggTable} where course_id=? and batch_id=? and user_id=?")
     if (redisEnabled) {
@@ -131,7 +156,11 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
       val row = rs.one()
       if (row != null) {
         val sm = if (!row.isNull("statusmap")) row.getMap("statusmap", classOf[String], classOf[Integer]).asScala.map { case (k, v) => k -> v.intValue() }.toMap else Map.empty[String, Int]
-        val opt = if (!row.isNull("optional_collection")) row.getList("optional_collection", classOf[String]).asScala.toSet else Set.empty[String]
+        val opt = if (!row.isNull("optional_batches")) {
+          row.getList("optional_batches", classOf[String]).asScala.map { s =>
+            if (s != null) { val idx = s.lastIndexOf(':'); if (idx >= 0 && idx + 1 < s.length) s.substring(idx + 1) else s } else ""
+          }.filter(_.nonEmpty).toSet
+        } else Set.empty[String]
         (sm, opt)
       } else (Map.empty[String, Int], Set.empty[String])
     } catch { case ex: Exception => logger.error(s"CFStatusOptionalFetch failure user=$userId cf=$cfId batch=$batchId", ex); (Map.empty[String, Int], Set.empty[String]) }
@@ -145,7 +174,7 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
     if (allCourses.isEmpty) return Map.empty
     val result = scala.collection.mutable.Map[String, Set[String]]()
     users.foreach { uid =>
-      var optional = Set.empty[String]
+      var detectedOptional = Set.empty[String]
       allCourses.foreach { courseId =>
         try {
           logger.info(s"CQLExecute query='${userCourseStatusPs.getQueryString}' values=[$uid,$courseId]")
@@ -156,15 +185,12 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
             val r = it.next()
             if (!r.isNull("status") && r.getInt("status") == 2) completedFound = true
           }
-          if (completedFound) optional += courseId
+          if (completedFound) detectedOptional += courseId
         } catch { case ex: Exception => logger.warn(s"OptionalDetectQueryFailed user=$uid course=$courseId", ex) }
       }
-      if (optional.nonEmpty) {
-        try { logger.info(s"CQLExecute query='${updateOptionalPs.getQueryString}' values=[${optional.mkString("|")},$uid,$cfId,$baseBatch]"); cassandraUtil.session.execute(updateOptionalPs.bind(new java.util.ArrayList[String](optional.asJava), uid, cfId, baseBatch)) } catch { case ex: Exception => logger.error(s"OptionalPersistFailed user=$uid cf=$cfId optional=${optional.mkString(",")}", ex) }
-        optionalCache.put(optKey(uid, cfId, baseBatch), optional)
-        logger.info(s"OptionalCoursesDetected user=$uid cf=$cfId count=${optional.size} list=${optional.mkString(",")}")
-      }
-      result.put(uid, optional)
+      val merged = mergeAndPersistOptional(uid, cfId, baseBatch, detectedOptional)
+      result.put(uid, merged)
+      if (detectedOptional.nonEmpty) logger.info(s"OptionalCoursesDetected user=$uid cf=$cfId detected=${detectedOptional.mkString(",")} mergedCount=${merged.size}")
     }
     result.toMap
   }
@@ -392,13 +418,12 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
     val (orderedCLs, structures, enrollmentType) = loadStructure(resolvedCfId)
     if (orderedCLs.isEmpty) return
     val baseBatch = normalizeBatchId(event.batchId)
-    val originalUsers = event.userIds // define early so it can be used for optional derivation
+    val originalUsers = event.userIds
     val strategy = strategyFor(enrollmentType, resolvedCfId, baseBatch, None, orderedCLs, structures)
     val courseToCL = structures.values.flatMap { s => var all = s.courseIds; if (s.levelExamId != null) all = all :+ s.levelExamId; if (s.entranceExamId != null) all = all :+ s.entranceExamId; all.map(_ -> s) }.toMap
     val clStructOpt = courseToCL.get(event.courseId)
     if (clStructOpt.isEmpty) return
     val clStruct = clStructOpt.get
-    // On entrance exam completion, build mappings & derive optionals before computing next step
     logger.info(s"ProgressionCheckEntranceExam strategy=${strategy.name} entranceExamId=${Option(clStruct.entranceExamId).getOrElse("null")} courseId=${event.courseId} users=${Option(originalUsers).map(_.size).getOrElse(0)}")
     if (strategy.isInstanceOf[EntranceExamBasedStrategy] && clStruct.entranceExamId != null && event.courseId == clStruct.entranceExamId) {
       logger.info(s"EEOptional.BuildStart cf=$resolvedCfId cl=${clStruct.id} entranceExam=${clStruct.entranceExamId} baseBatch=$baseBatch users=${Option(originalUsers).map(_.mkString(",")).getOrElse("")}")
@@ -416,7 +441,6 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
         if (required.isEmpty) { logger.info(s"SkipOptionalCourseCompletion strategy=${strategy.name} course=${event.courseId} cf=$resolvedCfId totalUsers=${Option(originalUsers).map(_.size).getOrElse(0)} message=optional course completion does not advance progression"); return }
         required
     }
-    // Log details for optional course completion in Progress Based
     if (enrollmentType == "Progress Based") {
       val optionalCount = Option(originalUsers).getOrElse(Nil).count(u => isOptional(u, resolvedCfId, cfBatchId, event.courseId))
       if (optionalCount > 0) {
@@ -428,7 +452,6 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
       case NextEntranceExamCompleted(clId) =>
         enrollActivity("Competency Level", clId, baseBatch, users, s"phase=Progression startCLAfterEntranceExam")
         val nonOptionalQueue = scala.collection.mutable.ListBuffer[String]()
-        // Enroll optional courses for users who have them optional
         clStruct.courseIds.foreach { cid =>
           val optionalUsers = users.filter(u => isOptional(u, resolvedCfId, cfBatchId, cid))
           if (optionalUsers.nonEmpty) {
@@ -436,7 +459,6 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
             enrollActivity("Course", cid, baseBatch, optionalUsers, s"phase=Progression optionalCourseAfterEntranceExam cl=$clId")
           }
         }
-        // Determine first non-optional course for remaining users and enroll them
         val remainingUsers = users.filter(u => clStruct.courseIds.exists(cid => !isOptional(u, resolvedCfId, cfBatchId, cid)))
         if (remainingUsers.nonEmpty) {
           val nextNonOptional = clStruct.courseIds.find(cid => remainingUsers.exists(u => !isOptional(u, resolvedCfId, cfBatchId, cid)))
@@ -461,7 +483,6 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
         val needUsers = strategy.filterUsersForCourse(cid, resolvedCfId, cfBatchId, users)
         if (needUsers.nonEmpty) {
           enrollCLIfTransition(clId)
-          // For Entrance Exam Based: also enroll optional courses (if any) in parallel for those users
           if (strategy.isInstanceOf[EntranceExamBasedStrategy]) {
             clStruct.courseIds.filter(_ != cid).foreach { optCid =>
               val optionalUsers = needUsers.filter(u => isOptional(u, resolvedCfId, cfBatchId, optCid))
@@ -596,7 +617,6 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
                 Some(Map("id" -> id, "score" -> score, "max_score" -> maxScore))
               } catch { case _: Exception => None }
             case udt: com.datastax.driver.core.UDTValue =>
-              // Handle UDT question elements: pick common field aliases
               def getObj(name: String): Option[AnyRef] = try { if (!udt.isNull(name)) Option(udt.getObject(name)) else None } catch { case _: IllegalArgumentException => None }
               def pick(names: List[String]): Option[AnyRef] = names.view.flatMap(getObj).headOption
               val id = pick(List("id", "question_id", "qid", "item_id")).map(_.toString).getOrElse("")
@@ -636,16 +656,14 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
   private def deriveEntranceExamOptionalsSimple(cfId: String, clStruct: CLStructure, entranceExamId: String, baseBatch: String, users: List[String]): Unit = {
     if (users == null || users.isEmpty) return
     val entranceBatchId = batchId(baseBatch, entranceExamId)
-    // Extract all content (leaf) ids from entrance exam hierarchy (course)
     val entranceHierarchy = try { hierarchyHelper.getHierarchy(entranceExamId) } catch { case ex: Exception => logger.warn(s"EntranceHierarchyLoadFailed course=$entranceExamId", ex); null }
     if (entranceHierarchy == null || entranceHierarchy.isEmpty) { logger.warn(s"EEOptional.EntranceHierarchyEmpty course=$entranceExamId cf=$cfId cl=${clStruct.id}"); return }
     val contentIds = extractContentIds(entranceHierarchy)
     logger.info(s"EEOptional.ContentList entranceExam=$entranceExamId size=${contentIds.size} ids=${contentIds.mkString(",")}")
 
-    // Build course -> OE mapping from CF hierarchy's CL subtree
     val courseOEMap = getCourseOEMap(cfId, clStruct)
     if (courseOEMap.isEmpty) logger.warn(s"EEOptional.CourseOEMapEmpty cf=$cfId cl=${clStruct.id} note=No OEs discovered under CL subtree for its courses")
-    logger.info(s"EEOptional.CourseOEMapping cf=$cfId cl=${clStruct.id} mapping=${courseOEMap.map{case(c,oes)=>s"$c:[${oes.mkString(",")} ] (count=${oes.size})"}.mkString("|")}")
+    logger.info(s"EEOptional.CourseOEMapping cf=$cfId cl=${clStruct.id} mapping=${courseOEMap.map{case(c,oes)=>s"$c:[${oes.mkString(",")}] (count=${oes.size})"}.mkString("|")}")
 
     users.foreach { uid =>
       var totalQuestions = 0
@@ -667,30 +685,21 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
           }
         } else logger.info(s"EEOptional.NoScores user=$uid content=$contentId")
       }
-      logger.info(s"EEOptional.QuestionOEMapping user=$uid size=${questionOEMap.size} mapping=${questionOEMap.map{case(q,os)=>s"$q:[${os.mkString(",")} ]"}.mkString("|")}")
+      logger.info(s"EEOptional.QuestionOEMapping user=$uid size=${questionOEMap.size} mapping=${questionOEMap.map{case(q,os)=>s"$q:[${os.mkString(",")}]"}.mkString("|")}")
       logger.info(s"EEOptional.UserSummary user=$uid contentsScanned=${contentIds.size} totalQuestions=$totalQuestions passedThreshold=$passedThreshold optionalObservablesCount=${optionalObservables.size}")
 
       if (optionalObservables.nonEmpty) {
-        // Per-course overlap diagnostics
         clStruct.courseIds.foreach { courseId =>
           val courseOEs = courseOEMap.getOrElse(courseId, Set.empty[String])
           val overlap = courseOEs.intersect(optionalObservables.toSet)
           logger.info(s"EEOptional.CourseOverlap user=$uid course=$courseId courseOEsCount=${courseOEs.size} overlapCount=${overlap.size} overlap=${overlap.mkString(",")}")
         }
-        // Determine optional courses: any course whose OE list intersects optionalObservables
         val candidateCourses = clStruct.courseIds.toSet
         val newlyOptional = courseOEMap.collect { case (courseId, oes) if candidateCourses.contains(courseId) && oes.exists(optionalObservables.contains) => courseId }.toSet
         logger.info(s"EEOptional.OptionalObservables user=$uid set=${optionalObservables.mkString(",")}")
         logger.info(s"EEOptional.NewlyOptionalCourses user=$uid courses=${newlyOptional.mkString(",")}")
         if (newlyOptional.nonEmpty) {
-          val key = optKey(uid, cfId, baseBatch)
-          val merged = optionalCache.getOrElse(key, Set.empty) ++ newlyOptional
-          try {
-            logger.info(s"CQLExecute query='${updateOptionalPs.getQueryString}' values=[${merged.mkString("|")},$uid,$cfId,$baseBatch]")
-            cassandraUtil.session.execute(updateOptionalPs.bind(new java.util.ArrayList[String](merged.asJava), uid, cfId, baseBatch))
-            optionalCache.put(key, merged)
-            logger.info(s"EEOptional.Persisted cf=$cfId cl=${clStruct.id} user=$uid courses=${merged.mkString(",")}")
-          } catch { case ex: Exception => logger.warn(s"EEOptional.PersistFailed cf=$cfId cl=${clStruct.id} user=$uid courses=${newlyOptional.mkString(",")}", ex) }
+          mergeAndPersistOptional(uid, cfId, baseBatch, newlyOptional)
         } else {
           logger.info(s"EEOptional.NoOptionalDerived user=$uid reason=NoOverlap optionalObservablesCount=${optionalObservables.size} courseCount=${clStruct.courseIds.size}")
         }
@@ -700,7 +709,6 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
     }
   }
 
-  // Build mapping courseId -> Set[OE] for courses inside the CL subtree (depth-agnostic search)
   private def getCourseOEMap(cfId: String, clStruct: CLStructure): Map[String, Set[String]] = {
     val courseIds = clStruct.courseIds.toSet
     if (courseIds.isEmpty) return Map.empty
@@ -712,7 +720,6 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
         Option(node.get("children").asInstanceOf[java.util.List[java.util.Map[String, AnyRef]]])
           .map(_.asScala.toList).getOrElse(Nil)
 
-      // Find CL node anywhere in CF hierarchy
       def findCL(node: java.util.Map[String, AnyRef], depth: Int): Option[java.util.Map[String, AnyRef]] = {
         val id = Option(node.get("identifier")).map(_.toString).getOrElse("")
         if (id == clStruct.id) { logger.info(s"CLNodeFound cf=$cfId cl=${clStruct.id} depth=$depth"); return Some(node) }
@@ -723,14 +730,12 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
       if (clNodeOpt.isEmpty) { logger.warn(s"CLNodeNotFound cf=$cfId cl=${clStruct.id}"); return Map.empty }
       val clNode = clNodeOpt.get
 
-      // Collect all OEs in subtree of a node
       def collectAllOEs(node: java.util.Map[String, AnyRef]): Set[String] = {
         val direct = Option(node.get("targetobservableElementIds").asInstanceOf[java.util.List[String]])
           .map(_.asScala.toSet).getOrElse(Set.empty[String])
         childrenOf(node).foldLeft(direct) { (acc, ch) => acc ++ collectAllOEs(ch) }
       }
 
-      // For each courseId locate its node under CL subtree and aggregate OEs
       def findNodeById(node: java.util.Map[String, AnyRef], target: String, depth: Int): Option[(java.util.Map[String, AnyRef], Int)] = {
         val id = Option(node.get("identifier")).map(_.toString).getOrElse("")
         if (id == target) Some((node, depth))
@@ -759,7 +764,6 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
                                                           optionalByUser: Map[String, Set[String]],
                                                           targetUsers: List[String]): (Option[String], List[String]) = {
     if (cl == null || cl.courseIds.isEmpty || targetUsers == null || targetUsers.isEmpty) return (None, Nil)
-    // Iterate courses in order; pick first where at least one user does NOT have it optional
     cl.courseIds.foreach { cid =>
       val eligible = targetUsers.filter(u => !optionalByUser.getOrElse(u, Set.empty).contains(cid))
       if (eligible.nonEmpty) return (Some(cid), eligible)
@@ -778,7 +782,6 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
     if (clStruct == null || users == null || users.isEmpty) return
     val idx = clStruct.courseIds.indexOf(currentCourseId)
     if (idx < 0) return
-    // Look ahead for first course that is non-optional for at least one user
     var advanced = false
     var i = idx + 1
     while (i < clStruct.courseIds.size && !advanced) {
@@ -791,11 +794,9 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
       i += 1
     }
     if (!advanced) {
-      // All remaining courses optional; enroll level exam if present
       if (clStruct.levelExamId != null && clStruct.levelExamId.nonEmpty) {
         enrollActivity("Course", clStruct.levelExamId, baseBatch, users, s"phase=Progression levelExamAfterSkippingOptionals from=$currentCourseId")
       } else {
-        // Nothing else to do within this CL; next CL handled by normal progression when level exam (or last course) completes
         logger.info(s"AdvancePastOptionalNoFurtherAction cf=$cfId cl=${clStruct.id} from=$currentCourseId enrollmentType=$enrollmentType")
       }
     }
@@ -817,7 +818,6 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
     throw new RuntimeException("Unreachable")
   }
 
-  // Fetch observable element ids for a question (with cache + search API fallback)
   private def getObservableElements(questionId: String): List[String] = {
     if (hierarchyCache == null || questionId == null || questionId.isEmpty) return Nil
     val key = s"$OE_KEY_PREFIX$questionId"
