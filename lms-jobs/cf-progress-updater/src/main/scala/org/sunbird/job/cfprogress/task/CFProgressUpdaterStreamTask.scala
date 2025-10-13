@@ -6,11 +6,11 @@ import com.typesafe.config.ConfigFactory
 import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.api.java.typeutils.TypeExtractor
 import org.apache.flink.api.java.utils.ParameterTool
-import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
-import org.sunbird.job.connector.FlinkKafkaConnector
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
+import org.sunbird.dp.core.job.FlinkKafkaConnector
 import org.sunbird.job.cfprogress.domain.Event
 import org.sunbird.job.cfprogress.functions.CFProgressAggregatesFunction
-import org.sunbird.job.util.FlinkUtil
+import org.sunbird.dp.core.util.FlinkUtil
 
 
 class CFProgressUpdaterStreamTask(config: CFProgressUpdaterConfig, kafkaConnector: FlinkKafkaConnector) {

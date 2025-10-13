@@ -1,7 +1,7 @@
 package org.sunbird.job.cfprogress.domain
 
 import org.apache.commons.lang3.StringUtils
-import org.sunbird.job.domain.reader.JobRequest
+import org.sunbird.dp.core.domain.reader.JobRequest
 import org.slf4j.LoggerFactory
 
 import java.util
@@ -25,7 +25,7 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
     else readOrDefault[String]("object.id", "")
   }
 
-  def cdata: List[Map[String, AnyRef]] = readOrDefault[List[Map[String, AnyRef]]]("context.cdata", List())
+  def cdata: List[Map[String, AnyRef]] = readOrDefaultAsScalaList("context.cdata")
 
   def activityId: String = {
     try {
@@ -44,7 +44,6 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
 
   def activityType: String = "Course"
 
-  def testBatchId: List[Map[String, AnyRef]] = cdata
 
   def batchId: String = {
     try {
@@ -64,11 +63,11 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
 
   def progress: Double = readOrDefault[Double]("edata.progress", 0.0)
 
-  def eData: Map[String, AnyRef] = readOrDefault("edata", new util.HashMap[String, AnyRef]()).asInstanceOf[Map[String, AnyRef]]
+  def eData: Map[String, AnyRef] = readOrDefaultAsScalaMap("edata")
 
-  def context: Map[String, AnyRef] = readOrDefault("context", new util.HashMap[String, AnyRef]()).asInstanceOf[Map[String, AnyRef]]
+  def context: Map[String, AnyRef] = readOrDefaultAsScalaMap("context")
 
-  def objectData: Map[String, AnyRef] = readOrDefault("object", new util.HashMap[String, AnyRef]()).asInstanceOf[Map[String, AnyRef]]
+  def objectData: Map[String, AnyRef] = readOrDefaultAsScalaMap("object")
 
   def isValidEvent(allowedActions: List[String]): Boolean = {
     allowedActions.contains(action) && 

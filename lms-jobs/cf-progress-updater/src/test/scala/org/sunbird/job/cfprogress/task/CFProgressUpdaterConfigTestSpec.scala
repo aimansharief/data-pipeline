@@ -1,7 +1,7 @@
 package org.sunbird.job.cfprogress.task
 
 import com.typesafe.config.{Config, ConfigFactory}
-import org.sunbird.spec.BaseTestSpec
+import org.sunbird.dp.BaseTestSpec
 
 class CFProgressUpdaterConfigTestSpec extends BaseTestSpec {
 

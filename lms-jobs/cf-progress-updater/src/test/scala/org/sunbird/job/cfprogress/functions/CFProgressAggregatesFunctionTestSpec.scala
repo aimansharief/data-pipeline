@@ -10,8 +10,8 @@ import org.mockito.ArgumentMatchers._
 import org.sunbird.job.cfprogress.domain.Event
 import org.sunbird.job.cfprogress.task.CFProgressUpdaterConfig
 import org.sunbird.job.fixture.EventFixture
-import org.sunbird.job.util.{CassandraUtil, JSONUtil}
-import org.sunbird.spec.BaseTestSpec
+import org.sunbird.dp.core.util.{CassandraUtil, JSONUtil}
+import org.sunbird.dp.BaseTestSpec
 
 import java.util
 
@@ -32,7 +32,7 @@ class CFProgressAggregatesFunctionTestSpec extends BaseTestSpec {
     val cfProgressAggregatesFunction = new CFProgressAggregatesFunction(jobConfig)
     setCassandraUtil(cfProgressAggregatesFunction, mockCassandraUtil)
     val mockContext = mock[ProcessFunction[Event, String]#Context]
-    val mockMetrics = mock[org.sunbird.job.Metrics]
+    val mockMetrics = mock[org.sunbird.dp.core.job.Metrics]
 
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_PROGRESS_EVENT)
     val event = new Event(eventMap, 0, 10L)
@@ -49,7 +49,7 @@ class CFProgressAggregatesFunctionTestSpec extends BaseTestSpec {
     val cfProgressAggregatesFunction = new CFProgressAggregatesFunction(jobConfig)
     setCassandraUtil(cfProgressAggregatesFunction, mockCassandraUtil)
     val mockContext = mock[ProcessFunction[Event, String]#Context]
-    val mockMetrics = mock[org.sunbird.job.Metrics]
+    val mockMetrics = mock[org.sunbird.dp.core.job.Metrics]
 
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.INVALID_EVENT_MISSING_USER_ID)
     val event = new Event(eventMap, 0, 10L)
@@ -90,7 +90,7 @@ class CFProgressAggregatesFunctionTestSpec extends BaseTestSpec {
     val cfProgressAggregatesFunction = new CFProgressAggregatesFunction(jobConfig)
     setCassandraUtil(cfProgressAggregatesFunction, mockCassandraUtil)
     val mockContext = mock[ProcessFunction[Event, String]#Context]
-    val mockMetrics = mock[org.sunbird.job.Metrics]
+    val mockMetrics = mock[org.sunbird.dp.core.job.Metrics]
 
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_CF_PROGRESS_EVENT)
     val event = new Event(eventMap, 0, 10L)

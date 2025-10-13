@@ -1,8 +1,8 @@
 package org.sunbird.job.cfprogress.domain
 
 import org.sunbird.job.fixture.EventFixture
-import org.sunbird.job.util.JSONUtil
-import org.sunbird.spec.BaseTestSpec
+import org.sunbird.dp.core.util.JSONUtil
+import org.sunbird.dp.BaseTestSpec
 
 import java.util
 
@@ -13,7 +13,7 @@ class EventTestSpec extends BaseTestSpec {
   "Event" should "parse complete enrolment event correctly with all fields" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_ENROL_COMPLETE_EVENT)
     val event = new Event(eventMap, 0, 10L)
-    println(s"cdata: ${event.activityId}")
+    println(s"cdata: ${event.cdata}")
     // Validate all field extractions
     event.eid should be("AUDIT")
     event.identifier should be("do_21441672239907635218")
@@ -29,7 +29,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event" should "parse progress update event correctly" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_PROGRESS_UPDATE_EVENT)
-    val event = new Event(eventMap, 0, 11L)
+    val event = new Event(eventMap, 0, 10L)
     
     event.eid should be("AUDIT")
     event.identifier should be("course-001")
@@ -45,7 +45,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event" should "extract userId from actor.id when present" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_EVENT_WITH_ACTOR_ID)
-    val event = new Event(eventMap, 0, 12L)
+    val event = new Event(eventMap, 0, 10L)
     
     // When actor.id is present, it should be used
     event.userId should be("actor-user-001")
@@ -53,7 +53,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event" should "fallback to object.id for userId when actor.id is missing" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_EVENT_WITH_OBJECT_ID_FALLBACK)
-    val event = new Event(eventMap, 0, 13L)
+    val event = new Event(eventMap, 0, 10L)
     
     // When actor.id is missing/blank, should fallback to object.id
     event.userId should be("fallback-user-001")
@@ -61,7 +61,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event" should "extract activityId from cdata Course type correctly" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_EVENT_WITH_MULTIPLE_CDATA)
-    val event = new Event(eventMap, 0, 14L)
+    val event = new Event(eventMap, 0, 10L)
     
     // Should find Course type in cdata and extract its id
     event.activityId should be("course-multi-001")
@@ -70,7 +70,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event" should "extract batchId from cdata CourseBatch type correctly" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_EVENT_WITH_MULTIPLE_CDATA)
-    val event = new Event(eventMap, 0, 15L)
+    val event = new Event(eventMap, 0, 10L)
     
     // Should find CourseBatch type in cdata and extract its id
     event.batchId should be("batch-multi-001")
@@ -78,7 +78,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event" should "fallback to object.rollup.l1 for activityId when cdata is missing" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_EVENT_WITH_NO_CDATA)
-    val event = new Event(eventMap, 0, 16L)
+    val event = new Event(eventMap, 0, 10L)
     
     // When cdata is missing, should fallback to object.rollup.l1
     event.activityId should be("course-from-rollup")
@@ -87,7 +87,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event" should "fallback to object.rollup.l1 for activityId when cdata is empty" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_EVENT_WITH_EMPTY_CDATA)
-    val event = new Event(eventMap, 0, 17L)
+    val event = new Event(eventMap, 0, 10L)
     
     // When cdata is empty array, should fallback to object.rollup.l1
     event.activityId should be("course-from-empty-cdata-rollup")
@@ -96,7 +96,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event" should "handle zero progress correctly" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_EVENT_WITH_ZERO_PROGRESS)
-    val event = new Event(eventMap, 0, 18L)
+    val event = new Event(eventMap, 0, 10L)
     
     event.progress should be(0.0)
     event.action should be("progress-update")
@@ -104,7 +104,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event" should "handle 100% progress correctly" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_EVENT_WITH_FULL_PROGRESS)
-    val event = new Event(eventMap, 0, 19L)
+    val event = new Event(eventMap, 0, 10L)
     
     event.progress should be(100.0)
     event.action should be("progress-update")
@@ -112,14 +112,14 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event" should "handle decimal progress values correctly" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_EVENT_WITH_DECIMAL_PROGRESS)
-    val event = new Event(eventMap, 0, 20L)
+    val event = new Event(eventMap, 0, 10L)
     
     event.progress should be(45.67)
   }
 
   "Event" should "always return 'Course' as activityType" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_ENROL_COMPLETE_EVENT)
-    val event = new Event(eventMap, 0, 21L)
+    val event = new Event(eventMap, 0, 10L)
     
     // activityType is hardcoded to "Course"
     event.activityType should be("Course")
@@ -127,7 +127,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event" should "extract eData map correctly" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_ENROL_COMPLETE_EVENT)
-    val event = new Event(eventMap, 0, 22L)
+    val event = new Event(eventMap, 0, 10L)
     
     val eData = event.eData
     eData should not be empty
@@ -136,7 +136,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event" should "extract context map correctly" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_ENROL_COMPLETE_EVENT)
-    val event = new Event(eventMap, 0, 23L)
+    val event = new Event(eventMap, 0, 10L)
     
     val context = event.context
     context should not be empty
@@ -146,7 +146,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event" should "extract objectData map correctly" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_ENROL_COMPLETE_EVENT)
-    val event = new Event(eventMap, 0, 24L)
+    val event = new Event(eventMap, 0, 10L)
     
     val objectData = event.objectData
     objectData should not be empty
@@ -156,7 +156,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event isValidEvent" should "return true for valid enrol-complete event" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_ENROL_COMPLETE_EVENT)
-    val event = new Event(eventMap, 0, 25L)
+    val event = new Event(eventMap, 0, 10L)
     val allowedActions = List("enrol-complete", "progress-update")
     
     event.isValidEvent(allowedActions) should be(true)
@@ -164,7 +164,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event isValidEvent" should "return true for valid progress-update event" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_PROGRESS_UPDATE_EVENT)
-    val event = new Event(eventMap, 0, 26L)
+    val event = new Event(eventMap, 0, 10L)
     val allowedActions = List("enrol-complete", "progress-update")
     
     event.isValidEvent(allowedActions) should be(true)
@@ -172,7 +172,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event isValidEvent" should "return true when userId is from actor.id" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_EVENT_WITH_ACTOR_ID)
-    val event = new Event(eventMap, 0, 27L)
+    val event = new Event(eventMap, 0, 10L)
     val allowedActions = List("enrol-complete")
     
     event.isValidEvent(allowedActions) should be(true)
@@ -180,7 +180,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event isValidEvent" should "return true when userId is from object.id fallback" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_EVENT_WITH_OBJECT_ID_FALLBACK)
-    val event = new Event(eventMap, 0, 28L)
+    val event = new Event(eventMap, 0, 10L)
     val allowedActions = List("enrol-complete")
     
     event.isValidEvent(allowedActions) should be(true)
@@ -188,7 +188,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event isValidEvent" should "return true for event with zero progress" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_EVENT_WITH_ZERO_PROGRESS)
-    val event = new Event(eventMap, 0, 29L)
+    val event = new Event(eventMap, 0, 10L)
     val allowedActions = List("progress-update")
     
     event.isValidEvent(allowedActions) should be(true)
@@ -196,7 +196,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event isValidEvent" should "return true for event with full progress" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_EVENT_WITH_FULL_PROGRESS)
-    val event = new Event(eventMap, 0, 30L)
+    val event = new Event(eventMap, 0, 10L)
     val allowedActions = List("progress-update")
     
     event.isValidEvent(allowedActions) should be(true)
@@ -204,7 +204,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event isValidEvent" should "return true for event with decimal progress" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.VALID_EVENT_WITH_DECIMAL_PROGRESS)
-    val event = new Event(eventMap, 0, 31L)
+    val event = new Event(eventMap, 0, 10L)
     val allowedActions = List("progress-update")
     
     event.isValidEvent(allowedActions) should be(true)
@@ -214,7 +214,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event isValidEvent" should "return false when userId is missing" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.INVALID_EVENT_MISSING_USER_ID)
-    val event = new Event(eventMap, 0, 32L)
+    val event = new Event(eventMap, 0, 10L)
     val allowedActions = List("enrol-complete")
     
     // userId is blank, so should be invalid
@@ -223,7 +223,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event isValidEvent" should "return false when eid is not AUDIT" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.INVALID_EVENT_WRONG_EID)
-    val event = new Event(eventMap, 0, 33L)
+    val event = new Event(eventMap, 0, 10L)
     val allowedActions = List("enrol-complete")
     
     // eid is BE_JOB_REQUEST instead of AUDIT
@@ -232,7 +232,7 @@ class EventTestSpec extends BaseTestSpec {
 
   "Event isValidEvent" should "return false when action is not in allowed list" in {
     val eventMap = JSONUtil.deserialize[util.Map[String, Any]](EventFixture.INVALID_EVENT_UNSUPPORTED_ACTION)
-    val event = new Event(eventMap, 0, 34L)
+    val event = new Event(eventMap, 0, 10L)
     val allowedActions = List("enrol-complete", "progress-update")
     
     // action is "unsupported-action" which is not in allowedActions

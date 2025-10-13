@@ -7,12 +7,12 @@ import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.api.java.typeutils.TypeExtractor
 import org.mockito.Mockito
 import org.mockito.Mockito._
-import org.sunbird.job.connector.FlinkKafkaConnector
+import org.sunbird.dp.core.job.FlinkKafkaConnector
 import org.sunbird.job.fixture.EventFixture
 import org.sunbird.job.cfprogress.domain.Event
 import org.sunbird.job.cfprogress.task.{CFProgressUpdaterConfig, CFProgressUpdaterStreamTask}
-import org.sunbird.job.util.JSONUtil
-import org.sunbird.spec.BaseTestSpec
+import org.sunbird.dp.core.util.JSONUtil
+import org.sunbird.dp.BaseTestSpec
 
 import scala.collection.JavaConverters._
 

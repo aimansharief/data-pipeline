@@ -5,7 +5,7 @@ import java.util
 import com.typesafe.config.Config
 import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.api.java.typeutils.TypeExtractor
-import org.sunbird.job.BaseJobConfig
+import org.sunbird.dp.core.job.BaseJobConfig
 
 class CFProgressUpdaterConfig(override val config: Config) extends BaseJobConfig(config, "cf-progress-updater") {
 

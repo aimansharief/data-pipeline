@@ -8,11 +8,11 @@ import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.configuration.Configuration
 import org.apache.flink.streaming.api.functions.ProcessFunction
 import org.slf4j.LoggerFactory
-import org.sunbird.job.cache.{DataCache, RedisConnect}
+import org.sunbird.dp.core.cache.{DataCache, RedisConnect}
 import org.sunbird.job.cfprogress.domain.Event
 import org.sunbird.job.cfprogress.task.CFProgressUpdaterConfig
-import org.sunbird.job.util.CassandraUtil
-import org.sunbird.job.{BaseProcessFunction, Metrics}
+import org.sunbird.dp.core.util.CassandraUtil
+import org.sunbird.dp.core.job.{BaseProcessFunction, Metrics}
 
 import scala.collection.JavaConverters._
 
@@ -33,7 +33,7 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
         if (cassandraUtil == null) {
             cassandraUtil = new CassandraUtil(config.dbHost, config.dbPort, config.isMultiDCEnabled)
         }
-        cache = new DataCache(config, new RedisConnect(config), config.nodeStore, List())
+        cache = new DataCache(config, new RedisConnect(config.redisHost, config.redisPort, config), config.nodeStore, List())
         cache.init()
     }
 
@@ -289,11 +289,13 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
         groupedQueries.foreach(queries => {
             val cqlBatch = QueryBuilder.batch()
             queries.foreach(query => cqlBatch.add(query))
-            val result = cassandraUtil.upsert(cqlBatch.toString)
+            val batchQuery = cqlBatch.toString
+            logger.info("Executing batch upsert query: {}", batchQuery)
+            val result = cassandraUtil.upsert(batchQuery)
             if (result) {
                 metrics.incCounter(config.dbUpdateCount)
             } else {
-                val msg = "Database update has failed: " + cqlBatch.toString
+                val msg = "Database update has failed: " + batchQuery
                 logger.error(msg)
                 throw new Exception(msg)
             }

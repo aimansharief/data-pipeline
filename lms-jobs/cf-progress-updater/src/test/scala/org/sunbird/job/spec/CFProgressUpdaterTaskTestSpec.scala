@@ -14,12 +14,12 @@ import org.cassandraunit.dataset.cql.FileCQLDataSet
 import org.cassandraunit.utils.EmbeddedCassandraServerHelper
 import org.mockito.Mockito
 import org.mockito.Mockito._
-import org.sunbird.job.connector.FlinkKafkaConnector
+import org.sunbird.dp.core.job.FlinkKafkaConnector
 import org.sunbird.job.fixture.EventFixture
 import org.sunbird.job.cfprogress.domain.Event
 import org.sunbird.job.cfprogress.task.{CFProgressUpdaterConfig, CFProgressUpdaterStreamTask}
-import org.sunbird.job.util.{CassandraUtil, JSONUtil}
-import org.sunbird.spec.{BaseMetricsReporter, BaseTestSpec}
+import org.sunbird.dp.core.util.{CassandraUtil, JSONUtil}
+import org.sunbird.dp.{BaseMetricsReporter, BaseTestSpec}
 import org.scalatest.Ignore
 
 import scala.collection.JavaConverters._
