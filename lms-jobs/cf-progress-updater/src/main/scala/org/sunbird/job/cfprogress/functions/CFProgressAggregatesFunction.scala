@@ -67,9 +67,14 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
                 val ancestors = readFromCache(key = s"${event.batchId}-${config.ancestors}", metrics)
                 
                 if (ancestors.nonEmpty) {
-                    val parentProgressList: List[Map[String, AnyRef]] = ancestors.map(parentId => 
-                        computeParentProgress(parentId, event.userId, completedBatchIds, metrics)
-                    )
+                    // Fetch batch metadata for all ancestors before computing parent progress
+                    val batchMetadataMap = fetchBatchMetadata(ancestors, metrics)
+                    logger.info("Fetched batch metadata for {} ancestors", batchMetadataMap.size.asInstanceOf[Object])
+                    
+                    // Extract batch metadata values and compute parent progress for each
+                    val parentProgressList: List[Map[String, AnyRef]] = batchMetadataMap.values.map(batchMetadata => 
+                        computeParentProgress(batchMetadata, event.userId, completedBatchIds, metrics)
+                    ).toList
                     
                     // Update the parent progress in the database
                     updateParentProgress(parentProgressList, metrics)
@@ -183,13 +188,18 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
     /**
      * Compute progress for a parent batch based on completed child batches
      *
-     * @param parentId          The parent batch ID
+     * @param batchMetadata     Batch metadata containing batchId, activityId and activityType
      * @param userId            The user ID
      * @param completedBatchIds Set of completed batch IDs for the user
      * @param metrics           Metrics object to track operations
-     * @return Map containing batchid, progress, userid, and optionally completedon
+     * @return Map containing batchid, progress, userid, activityid, activitytype, and optionally completedon
      */
-    private def computeParentProgress(parentId: String, userId: String, completedBatchIds: Set[String], metrics: Metrics): Map[String, AnyRef] = {
+    private def computeParentProgress(batchMetadata: BatchMetadata, userId: String, completedBatchIds: Set[String], 
+                                     metrics: Metrics): Map[String, AnyRef] = {
+        val parentId = batchMetadata.batchId
+        val activityId = batchMetadata.activityId
+        val activityType = batchMetadata.activityType
+        
         val leafNodeIds = readFromCache(key = s"${parentId}-${config.leafNodes}", metrics)
         if (leafNodeIds == null || leafNodeIds.isEmpty) {
             throw new RuntimeException(s"Cache missing or empty for key: ${parentId}-${config.leafNodes}. ParentId ${parentId} must have leafNodeIds.")
@@ -202,15 +212,17 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
         val totalCount = leafNodeIdSet.size
         val progressPercentage = if (totalCount > 0) Math.ceil(completedCount * 100.0 / totalCount).toInt else 0
         
-        logger.info("ParentId: {} | Total leafNodes: {} | Completed: {} | Progress: {}% | Completed batchIds: {}", 
-                   parentId, totalCount.asInstanceOf[Object], completedCount.asInstanceOf[Object], 
+        logger.info("ParentId: {} | ActivityId: {} | ActivityType: {} | Total leafNodes: {} | Completed: {} | Progress: {}% | Completed batchIds: {}", 
+                   parentId, activityId, activityType, totalCount.asInstanceOf[Object], completedCount.asInstanceOf[Object], 
                    progressPercentage.asInstanceOf[Object], completedBatchIdsForParent.mkString(", "))
         
         // Compose the result map
         val baseMap = Map(
             "batchid" -> parentId,
             "progress" -> Integer.valueOf(progressPercentage),
-            "userid" -> userId
+            "userid" -> userId,
+            "activityid" -> activityId,
+            "activitytype" -> activityType
         )
         
         if (progressPercentage == 100) {
@@ -247,16 +259,18 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
     /**
      * Create an update query for a parent progress record
      *
-     * @param progressMap Map containing userid, batchid, progress, and optionally completedon
+     * @param progressMap Map containing userid, batchid, progress, activityid, activitytype, and optionally completedon
      * @return Update query
      */
     private def getParentProgressUpdateQuery(progressMap: Map[String, AnyRef]): Update.Where = {
         val userId = progressMap("userid").toString
         val batchId = progressMap("batchid").toString
         val progress = progressMap("progress").asInstanceOf[Integer].intValue()
+        val activityId = progressMap("activityid").toString
+        val activityType = progressMap("activitytype").toString
         
         logger.info("Creating update query for parent progress - userId: {}, batchId: {}, activityId: {}, activityType: {}, progress: {}", 
-                   userId, batchId, config.parentActivityId, config.parentActivityType, progress.asInstanceOf[Object])
+                   userId, batchId, activityId, activityType, progress.asInstanceOf[Object])
         
         val updateQuery = QueryBuilder.update(config.collectionTrackingKeyspace, config.collectionEnrolmentsTable)
             .`with`(QueryBuilder.set("progress", progress))
@@ -272,8 +286,8 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
         
         updateQuery
             .where(QueryBuilder.eq("userid", userId))
-            .and(QueryBuilder.eq("activityid", config.parentActivityId))
-            .and(QueryBuilder.eq("activitytype", config.parentActivityType))
+            .and(QueryBuilder.eq("activityid", activityId))
+            .and(QueryBuilder.eq("activitytype", activityType))
             .and(QueryBuilder.eq("batchid", batchId))
     }
 
