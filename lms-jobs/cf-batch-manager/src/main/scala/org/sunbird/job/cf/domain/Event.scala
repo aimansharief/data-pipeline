@@ -49,9 +49,16 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long)
   }
 
   // Users
-  def userIds: List[String] = readOrDefault[List[String]]("edata.userIds", Nil) match {
-    case Nil => Option(readOrDefault[String]("actor.id", "")).filter(_.nonEmpty).toList
-    case l => l
+  def userIds: List[String] = {
+    val fromEdata: List[String] = read[Any]("edata.userIds") match {
+      case Some(list: java.util.List[_]) =>
+        list.asScala.collect { case x if x != null => x.toString.trim }.filter(_.nonEmpty).toList
+      case Some(list: Iterable[_]) =>
+        list.collect { case x if x != null => x.toString.trim }.filter(_.nonEmpty).toList
+      case None => Nil
+    }
+    if (fromEdata.nonEmpty) fromEdata
+    else Option(readOrDefault[String]("actor.id", "")).map(_.trim).filter(_.nonEmpty).toList
   }
 
   // Meta
