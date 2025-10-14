@@ -7,11 +7,10 @@ import org.sunbird.job.cf.domain.Event
 import org.sunbird.job.cf.task.CfBatchManagerConfig
 import org.sunbird.job.cf.util.{CFCacheUtil, HierarchyHelper}
 import com.fasterxml.jackson.databind.ObjectMapper
-import org.sunbird.job.exception.InvalidEventException
-import org.sunbird.job.util.CassandraUtil
-import org.sunbird.job.util.HttpUtil
-import org.sunbird.job.{BaseProcessFunction, Metrics}
-import org.sunbird.job.cache.{DataCache, RedisConnect}
+import org.sunbird.dp.core.util.CassandraUtil
+import org.sunbird.dp.core.util.HttpUtil
+import org.sunbird.dp.core.job.{BaseProcessFunction, Metrics}
+import org.sunbird.dp.core.cache.{DataCache, RedisConnect}
 import com.fasterxml.jackson.core.JsonToken
 import com.fasterxml.jackson.core.JsonParser
 import com.fasterxml.jackson.core.JsonFactory
@@ -35,7 +34,7 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
     hierarchyHelper = new HierarchyHelper(cassandraUtil, config.dbKeyspace, config.dbTable)
     if (redisEnabled) {
       try {
-        hierarchyCache = new DataCache(config, new RedisConnect(config), config.cfHierarchyRedisDb, Nil)
+        hierarchyCache = new DataCache(config, new RedisConnect(config.cfHierarchyRedisHost, config.cfHierarchyRedisPort, config), config.cfHierarchyRedisDb, Nil)
         hierarchyCache.init()
         logger.info(s"Hierarchy DataCache initialised db=${config.cfHierarchyRedisDb}")
       } catch { case ex: Exception => logger.warn("Hierarchy DataCache init failed; proceeding without cache", ex) }
@@ -133,11 +132,11 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
           metrics.incCounter(config.processedEventCount)
         }
       }
-    } catch {
+  } catch {
       case e: Exception =>
         logger.error(s"Batch Update Failed: mid=${event.mid()} batchId=${event.batchId} activityId=${event.activityId}", e)
         metrics.incCounter(config.failedEventCount)
-        throw new InvalidEventException(e.getMessage, Map("partition" -> event.partition, "offset" -> event.offset), e)
+        throw e
     }
   }
 

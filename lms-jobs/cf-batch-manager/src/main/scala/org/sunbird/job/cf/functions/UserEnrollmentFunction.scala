@@ -7,10 +7,9 @@ import org.sunbird.job.cf.domain.Event
 import org.sunbird.job.cf.task.CfBatchManagerConfig
 import org.sunbird.job.cf.util.{CFCacheUtil, EnrollmentApiUtil, HierarchyHelper}
 import org.sunbird.job.cf.util.CFCacheUtil.{CLNode, CLStructure}
-import org.sunbird.job.exception.InvalidEventException
-import org.sunbird.job.util.{CassandraUtil, HttpUtil}
-import org.sunbird.job.{BaseProcessFunction, Metrics}
-import org.sunbird.job.cache.{DataCache, RedisConnect}
+import org.sunbird.dp.core.util.{CassandraUtil, HttpUtil}
+import org.sunbird.dp.core.job.{BaseProcessFunction, Metrics}
+import org.sunbird.dp.core.cache.{DataCache, RedisConnect}
 import com.datastax.driver.core.PreparedStatement
 
 import scala.collection.JavaConverters._
@@ -68,7 +67,7 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
     assessmentQuestionPs = cassandraUtil.session.prepare(s"select question from ${config.assessmentAggKeyspace}.${config.assessmentAggTable} where course_id=? and batch_id=? and user_id=? and content_id=?")
     if (redisEnabled) {
       try {
-        hierarchyCache = new DataCache(config, new RedisConnect(config), config.cfHierarchyRedisDb, Nil)
+        hierarchyCache = new DataCache(config, new RedisConnect(config.cfHierarchyRedisHost, config.cfHierarchyRedisPort, config), config.cfHierarchyRedisDb, Nil)
         hierarchyCache.init()
         logger.info(s"Hierarchy DataCache initialised db=${config.cfHierarchyRedisDb}")
       } catch { case ex: Exception => logger.warn("Hierarchy DataCache init failed; proceeding without cache", ex) }

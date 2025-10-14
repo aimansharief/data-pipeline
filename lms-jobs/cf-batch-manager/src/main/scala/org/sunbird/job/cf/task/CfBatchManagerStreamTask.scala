@@ -4,11 +4,12 @@ import com.typesafe.config.ConfigFactory
 import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.api.java.typeutils.TypeExtractor
 import org.apache.flink.api.java.utils.ParameterTool
-import org.apache.flink.streaming.api.scala.{StreamExecutionEnvironment, _}
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
+import org.apache.flink.api.scala._
 import org.sunbird.job.cf.domain.Event
 import org.sunbird.job.cf.functions.{BatchUpdaterFunction, CfEventRouter, UserEnrollmentFunction}
-import org.sunbird.job.connector.FlinkKafkaConnector
-import org.sunbird.job.util.FlinkUtil
+import org.sunbird.dp.core.job.FlinkKafkaConnector
+import org.sunbird.dp.core.util.FlinkUtil
 import org.slf4j.LoggerFactory
 
 import java.io.File

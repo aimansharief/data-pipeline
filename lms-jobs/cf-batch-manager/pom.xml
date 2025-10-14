@@ -32,32 +32,13 @@
         </dependency>
         <dependency>
             <groupId>org.sunbird</groupId>
-            <artifactId>jobs-core</artifactId>
+            <artifactId>dp-core</artifactId>
             <version>1.0.0</version>
         </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-core</artifactId>
-            <version>${com.fasterxml.jackson.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <version>${com.fasterxml.jackson.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.datastax.cassandra</groupId>
-            <artifactId>cassandra-driver-core</artifactId>
-            <version>3.7.0</version>
-        </dependency>
-        <dependency>
-            <groupId>joda-time</groupId>
-            <artifactId>joda-time</artifactId>
-            <version>2.10.6</version>
-        </dependency>
+        <!-- Removed explicit jackson/cassandra/joda as dp-core already bundles required APIs -->
         <dependency>
             <groupId>org.sunbird</groupId>
-            <artifactId>jobs-core</artifactId>
+            <artifactId>dp-core</artifactId>
             <version>1.0.0</version>
             <type>test-jar</type>
             <scope>test</scope>

@@ -6,9 +6,9 @@ import org.slf4j.LoggerFactory
 import org.sunbird.job.cf.domain.Event
 import org.sunbird.job.cf.task.CfBatchManagerConfig
 import org.sunbird.job.cf.util.HierarchyHelper
-import org.sunbird.job.{BaseProcessFunction, Metrics}
-import org.sunbird.job.cache.{DataCache, RedisConnect}
-import org.sunbird.job.util.CassandraUtil
+import org.sunbird.dp.core.job.{BaseProcessFunction, Metrics}
+import org.sunbird.dp.core.cache.{DataCache, RedisConnect}
+import org.sunbird.dp.core.util.CassandraUtil
 
 import scala.collection.JavaConverters._
 
@@ -29,7 +29,7 @@ class CFBatchCacheUpdate(config: CfBatchManagerConfig)
     hierarchyHelper = new HierarchyHelper(cassandraUtil, config.dbKeyspace, config.dbTable)
     if (redisEnabled) {
       try {
-        hierarchyCache = new DataCache(config, new RedisConnect(config), config.cfHierarchyRedisDb, Nil)
+        hierarchyCache = new DataCache(config, new RedisConnect(config.cfHierarchyRedisHost, config.cfHierarchyRedisPort, config), config.cfHierarchyRedisDb, Nil)
         hierarchyCache.init()
         logger.info(s"Hierarchy DataCache initialised db=${config.cfHierarchyRedisDb}")
       } catch { case ex: Exception => logger.warn("Hierarchy DataCache init failed; proceeding without cache", ex) }
@@ -55,7 +55,8 @@ class CFBatchCacheUpdate(config: CfBatchManagerConfig)
         v match {
           case list: List[_] =>
             val strList = list.asInstanceOf[List[String]]
-            cache.createListWithRetry(finalPrefix + k + finalSuffix, strList)
+            // DataCache in dp-core does not support list ops; store as JSON string
+            cache.setWithRetry(finalPrefix + k + finalSuffix, strList.mkString(","))
           case s: String =>
             cache.setWithRetry(finalPrefix + k + finalSuffix, s)
           case other =>
@@ -150,7 +151,7 @@ class CFBatchCacheUpdate(config: CfBatchManagerConfig)
             // Root-level leafnodes key: <batchId>-leafnodes, values are baseBatchId:courseId entries
             val allCourses = getAllCoursesUnderCF(hierarchy, baseBatchId)
             val rootKey = s"${baseBatchId}-leafnodes"
-            if (allCourses.nonEmpty) hierarchyCache.createListWithRetry(rootKey, allCourses)
+            if (allCourses.nonEmpty) hierarchyCache.setWithRetry(rootKey, allCourses.mkString(","))
           }
           val clCount = leafNodesMap.size
           val totalCourses = leafNodesMap.values.map(_.size).sum

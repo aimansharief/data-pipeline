@@ -1,6 +1,6 @@
 package org.sunbird.job.cf.domain
 
-import org.sunbird.job.domain.reader.JobRequest
+import org.sunbird.dp.core.domain.reader.JobRequest
 import java.util
 import scala.collection.JavaConverters._
 

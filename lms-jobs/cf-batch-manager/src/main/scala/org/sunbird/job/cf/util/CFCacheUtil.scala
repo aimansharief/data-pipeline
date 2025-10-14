@@ -1,7 +1,7 @@
 package org.sunbird.job.cf.util
 
 import org.slf4j.LoggerFactory
-import org.sunbird.job.cache.DataCache
+import org.sunbird.dp.core.cache.DataCache
 
 import scala.collection.JavaConverters._
 
