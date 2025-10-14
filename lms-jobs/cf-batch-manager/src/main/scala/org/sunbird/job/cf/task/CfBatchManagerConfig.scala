@@ -6,7 +6,7 @@ import com.typesafe.config.Config
 import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.api.java.typeutils.TypeExtractor
 import org.apache.flink.streaming.api.scala.OutputTag
-import org.sunbird.job.BaseJobConfig
+import org.sunbird.dp.core.job.BaseJobConfig
 import org.sunbird.job.cf.domain.Event
 
 class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(config, "cf-batch-manager") with Serializable {
@@ -88,12 +88,11 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   val assessmentAggTable: String = if (config.hasPath("assessment-aggregator-cassandra.table")) config.getString("assessment-aggregator-cassandra.table") else "assessment_aggregator"
 
   // Redis CF hierarchy cache (single redis block)
-  val redisConnectionTimeout: Int = if (config.hasPath("redis.connection.timeout")) config.getInt("redis.connection.timeout") else 30000
   val cfHierarchyRedisHost: String = if (config.hasPath("redis.host")) config.getString("redis.host") else "localhost"
   val cfHierarchyRedisPort: Int = if (config.hasPath("redis.port")) config.getInt("redis.port") else 6379
   val cfHierarchyRedisDb: Int = if (config.hasPath("redis.database.index")) config.getInt("redis.database.index") else 6
 
   // Search Service Configuration
-  val searchBasePath: String = getString("service.search.basePath", "http://search-service:9000")
+  val searchBasePath: String = if (config.hasPath("service.search.basePath")) config.getString("service.search.basePath") else "http://search-service:9000"
 
 }

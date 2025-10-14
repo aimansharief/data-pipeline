@@ -5,8 +5,7 @@ import org.apache.flink.streaming.api.functions.ProcessFunction
 import org.slf4j.LoggerFactory
 import org.sunbird.job.cf.domain.Event
 import org.sunbird.job.cf.task.CfBatchManagerConfig
-import org.sunbird.job.exception.InvalidEventException
-import org.sunbird.job.{BaseProcessFunction, Metrics}
+import org.sunbird.dp.core.job.{BaseProcessFunction, Metrics}
 
 class CfEventRouter(config: CfBatchManagerConfig)
   extends BaseProcessFunction[Event, Event](config) {
@@ -60,7 +59,7 @@ class CfEventRouter(config: CfBatchManagerConfig)
     } catch {
       case e: Exception =>
         metrics.incCounter(config.failedEventCount)
-        throw new InvalidEventException(e.getMessage, Map("partition" -> event.partition, "offset" -> event.offset), e)
+        throw e
     }
   }
 }

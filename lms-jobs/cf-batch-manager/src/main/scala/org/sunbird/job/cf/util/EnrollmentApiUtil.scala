@@ -1,7 +1,7 @@
 package org.sunbird.job.cf.util
 
 import org.slf4j.LoggerFactory
-import org.sunbird.job.util.HttpUtil
+import org.sunbird.dp.core.util.HttpUtil
 
 import scala.collection.JavaConverters._
 

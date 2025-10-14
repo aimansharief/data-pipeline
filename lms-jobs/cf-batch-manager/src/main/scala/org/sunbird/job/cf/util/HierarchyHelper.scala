@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.{DeserializationFeature, ObjectMapper}
 import org.apache.commons.collections.CollectionUtils
 import org.apache.commons.lang3.StringUtils
 import org.slf4j.LoggerFactory
-import org.sunbird.job.util.CassandraUtil
+import org.sunbird.dp.core.util.CassandraUtil
 
 import scala.collection.JavaConverters._
 
