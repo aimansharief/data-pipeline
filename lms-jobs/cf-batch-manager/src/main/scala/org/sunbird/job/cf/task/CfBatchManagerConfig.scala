@@ -18,7 +18,6 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   implicit val scalaMapTypeInfo: TypeInformation[Map[String, AnyRef]] = TypeExtractor.getForClass(classOf[Map[String, AnyRef]])
   implicit val stringTypeInfo: TypeInformation[String] = TypeExtractor.getForClass(classOf[String])
 
-  // Kafka Topics Configuration
   val kafkaInputTopic: String = config.getString("kafka.input.topic")
   val kafkaProgressionAuditTopic: String = if (config.hasPath("kafka.audit.progression.topic")) config.getString("kafka.audit.progression.topic") else "dev.user.enrollment.audit"
   val kafkaAuditEventTopic: String = config.getString("kafka.output.audit.topic")
@@ -27,27 +26,21 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   override val kafkaConsumerParallelism: Int = config.getInt("task.consumer.parallelism")
   val batchUpdaterParallelism: Int = config.getInt("task.batch.updater.parallelism")
 
-  // Metric List
   val totalEventCount = "total-events-count"
   val failedEventCount = "failed-events-count"
   val processedEventCount = "processed-events-count"
 
-  // Tags
   val auditEventOutputTagName = "audit-events"
   val auditEventOutputTag: OutputTag[String] = new OutputTag[String](auditEventOutputTagName)
   val failedEventOutputTagName = "failed-events"
   val failedEventOutputTag: OutputTag[String] = new OutputTag[String](failedEventOutputTagName)
   val batchUpdateOutputTagName = "batch-update-events"
   val batchUpdateOutputTag: OutputTag[Event] = new OutputTag[Event](batchUpdateOutputTagName)
-  // Use a timestamp-based unique identifier with specific module prefix
   val userEnrollmentOutputTagName = s"cf-batch-mgr-ue"
   val userEnrollmentOutputTag: OutputTag[Event] = new OutputTag[Event](userEnrollmentOutputTagName)
-
-  // Custom: CF batch cache side-output to trigger cache build in Redis
   val batchCacheOutputTagName = "cf-batch-cache"
   val batchCacheOutputTag: OutputTag[Event] = new OutputTag[Event](batchCacheOutputTagName)
 
-  // constants
   val batchId = "batchId"
   val userId = "userId"
   val eData = "edata"
@@ -59,12 +52,8 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   val auditProgressionEid = "AUDIT"
   val auditProgressionType = "enrol-complete"
   val entranceExamOptionalThreshold: Int = if (config.hasPath("entrance.exam.optional.threshold.percent")) config.getInt("entrance.exam.optional.threshold.percent") else 100
-
-  // Consumers
   val cfBatchManagerConsumer = "cf-batch-manager-consumer"
   val cfProgressionAuditConsumer = "cf-progress-audit-consumer"
-
-  // Producers
   val cfBatchManagerProducer = "cf-batch-manager-audit-events-sink"
   val cfBatchManagerFailedEventProducer = "cf-batch-manager-failed-sink"
 
@@ -79,11 +68,9 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   val courseEnrollRoute: String = config.getString("service.courseEnroll.endpoint")
   val userEnrollKeyspace: String = config.getString("user-enrolments-cassandra.keyspace")
   val userEnrollTable: String = config.getString("user-enrolments-cassandra.table")
-  // sb collection tracking keyspace/table (for statusmap lookups)
   val sbCollectionKeyspace: String = config.getString("sb-collection-cassandra.keyspace")
   val sbCollectionTable: String = config.getString("sb-collection-cassandra.table")
 
-  // assessment aggregator keyspace/table
   val assessmentAggKeyspace: String = if (config.hasPath("assessment-aggregator-cassandra.keyspace")) config.getString("assessment-aggregator-cassandra.keyspace") else userEnrollKeyspace
   val assessmentAggTable: String = if (config.hasPath("assessment-aggregator-cassandra.table")) config.getString("assessment-aggregator-cassandra.table") else "assessment_aggregator"
 

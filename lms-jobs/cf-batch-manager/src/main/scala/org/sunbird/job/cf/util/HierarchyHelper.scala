@@ -31,6 +31,32 @@ class HierarchyHelper(@transient private val cassandraUtil: CassandraUtil,
     }
   }
 
+  /**
+    * Fetch hierarchy using Redis cache when available, else read from DB and populate cache.
+    * - Cache key: activityId
+    * - Cache value: raw JSON string of the hierarchy
+    */
+  def getHierarchyWithCache(activityId: String, cache: DataCache): java.util.Map[String, AnyRef] = {
+    if (cache != null && StringUtils.isNotBlank(activityId)) {
+      try {
+        val cached = cache.getWithRetryCasePreserved(activityId)
+        if (cached != null && !cached.isEmpty) {
+          val jMap = new java.util.HashMap[String, AnyRef]()
+          cached.foreach { case (k, v) => jMap.put(k, v.asInstanceOf[AnyRef]) }
+          return jMap
+        }
+      } catch { case ex: Exception => logger.warn(s"Hierarchy cache read failed for $activityId", ex) }
+    }
+    val hierarchy = getHierarchy(activityId)
+    if (hierarchy != null && !hierarchy.isEmpty && cache != null) {
+      try {
+        val json = mapper.writeValueAsString(hierarchy)
+        cache.setWithRetry(activityId, json)
+      } catch { case ex: Exception => logger.warn(s"Hierarchy cache write failed for $activityId", ex) }
+    }
+    hierarchy
+  }
+
   def readHierarchyFromDb(identifier: String): String = {
     if (StringUtils.isBlank(keyspace) || StringUtils.isBlank(table)) {
       logger.warn("HierarchyHelper: keyspace/table not configured; skipping hierarchy read")
@@ -47,84 +73,4 @@ class HierarchyHelper(@transient private val cassandraUtil: CassandraUtil,
     if (CollectionUtils.isEmpty(children)) List().asJava else children
   }
 
-  def isCollection(content: java.util.Map[String, AnyRef]): Boolean = {
-    StringUtils.equalsIgnoreCase(content.getOrDefault("mimeType", "").asInstanceOf[String], "application/vnd.ekstep.content-collection")
-  }
-
-  def getOrComposeLeafNodes(hierarchy: java.util.Map[String, AnyRef], compose: Boolean = true): List[String] = {
-    if (hierarchy.containsKey("leafNodes") && !compose)
-      hierarchy.getOrDefault("leafNodes", java.util.Arrays.asList()).asInstanceOf[java.util.List[String]].asScala.toList
-    else {
-      val children = getChildren(hierarchy)
-      val childCollections = children.asScala.filter(c => isCollection(c))
-      val leafList = childCollections.flatMap(coll => getOrComposeLeafNodes(coll, compose = true)).toList
-      val ids = children.asScala.filterNot(c => isCollection(c)).map(c => c.getOrDefault("identifier", "").asInstanceOf[String]).filter(id => StringUtils.isNotBlank(id))
-      leafList ++ ids
-    }
-  }
-
-  def getLeafNodes(identifier: String, hierarchy: java.util.Map[String, AnyRef]): Map[String, List[String]] = {
-    val mimeType = hierarchy.getOrDefault("mimeType", "").asInstanceOf[String]
-    val leafNodesMap = if (StringUtils.equalsIgnoreCase(mimeType, "application/vnd.ekstep.content-collection")) {
-      val leafNodes = getOrComposeLeafNodes(hierarchy, compose = false)
-      val map: Map[String, List[String]] = if (leafNodes.nonEmpty) Map() + (identifier -> leafNodes) else Map()
-      val children = getChildren(hierarchy)
-      val childLeafNodesMap = if (CollectionUtils.isNotEmpty(children)) {
-        children.asScala.flatMap(child => {
-          val childId = child.get("identifier").asInstanceOf[String]
-          getLeafNodes(childId, child)
-        }).toMap
-      } else Map()
-      map ++ childLeafNodesMap
-    } else Map()
-    leafNodesMap.filter(m => m._2.nonEmpty).toMap
-  }
-
-  def isOptional(content: java.util.Map[String, AnyRef]): Boolean = {
-    val optionalMap = content.getOrDefault("relationalMetadata", new java.util.HashMap[String, AnyRef]()).asInstanceOf[java.util.Map[String, AnyRef]]
-    StringUtils.equalsIgnoreCase(optionalMap.getOrDefault("optional", "").toString, "true")
-  }
-
-  def getOrComposeOptionalNodes(hierarchy: java.util.Map[String, AnyRef], compose: Boolean = true): List[String] = {
-    val children = getChildren(hierarchy)
-    val ids = children.asScala.filter(c => isOptional(c)).map(c => c.getOrDefault("identifier", "").asInstanceOf[String]).filter(id => StringUtils.isNotBlank(id))
-    val childCollections = children.asScala.filterNot(c => isOptional(c))
-    val optionalList = childCollections.flatMap(coll => getOrComposeOptionalNodes(coll, compose = true)).toList
-    optionalList ++ ids
-  }
-
-  def getOptionalNodes(identifier: String, hierarchy: java.util.Map[String, AnyRef]): Map[String, List[String]] = {
-    val mimeType = hierarchy.getOrDefault("mimeType", "").asInstanceOf[String]
-    val optionalNodesMap = if (StringUtils.equalsIgnoreCase(mimeType, "application/vnd.ekstep.content-collection")) {
-      val optionalNodes = getOrComposeOptionalNodes(hierarchy, compose = false)
-      val map: Map[String, List[String]] = if (optionalNodes.nonEmpty) Map() + (identifier -> optionalNodes) else Map()
-      val children = getChildren(hierarchy)
-      val childOptionalNodesMap = if (CollectionUtils.isNotEmpty(children)) {
-        children.asScala.flatMap(child => {
-          val childId = child.get("identifier").asInstanceOf[String]
-          getOptionalNodes(childId, child)
-        }).toMap
-      } else Map()
-      map ++ childOptionalNodesMap
-    } else Map()
-    optionalNodesMap.filter(m => m._2.nonEmpty).toMap
-  }
-
-  def getAncestors(identifier: String, hierarchy: java.util.Map[String, AnyRef], parents: List[String] = List()): Map[String, List[String]] = {
-    val mimeType = hierarchy.getOrDefault("mimeType", "").asInstanceOf[String]
-    val isColl = StringUtils.equalsIgnoreCase(mimeType, "application/vnd.ekstep.content-collection")
-    val ancestors = if (isColl) identifier :: parents else parents
-    val ancestorsMap = if (isColl) {
-      getChildren(hierarchy).asScala.map(child => {
-        val childId = child.get("identifier").asInstanceOf[String]
-        getAncestors(childId, child, ancestors)
-      }).filter(m => m.nonEmpty).reduceOption((a, b) => {
-        val grouped = (a.toSeq ++ b.toSeq).groupBy(_._1)
-        grouped.mapValues(_.map(_._2).toList.flatten.distinct)
-      }).getOrElse(Map())
-    } else {
-      Map(identifier -> parents)
-    }
-    ancestorsMap.filter(m => m._2.nonEmpty)
-  }
 }

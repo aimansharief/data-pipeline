@@ -5,7 +5,7 @@ import org.apache.flink.streaming.api.functions.ProcessFunction
 import org.slf4j.LoggerFactory
 import org.sunbird.job.cf.domain.Event
 import org.sunbird.job.cf.task.CfBatchManagerConfig
-import org.sunbird.job.cf.util.{CFCacheUtil, HierarchyHelper}
+import org.sunbird.job.cf.util.{CFCacheUtil, HierarchyHelper, BatchMappingUtil}
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.sunbird.dp.core.util.CassandraUtil
 import org.sunbird.dp.core.util.HttpUtil
@@ -82,9 +82,10 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
     metrics.incCounter(config.totalEventCount)
     try {
       if (activityType.equalsIgnoreCase("Competency Framework")) {
+        // Store the base batch mapping to CF upfront
+        try BatchMappingUtil.storeBatchMapping(hierarchyCache, cfBatchId, activityId, "Competency Framework") catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$cfBatchId id=$activityId type=Competency Framework", ex) }
         val hierarchy = getHierarchyWithCache(activityId)
         if (hierarchy != null && !hierarchy.isEmpty) {
-          val hierarchyJson = new ObjectMapper().writeValueAsString(hierarchy)
           logger.info(s"Hierarchy loaded for $activityId")
 
           val enrollmentType = hierarchy.getOrDefault("enrollmentType", "").asInstanceOf[String]
@@ -100,24 +101,21 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
               val levelId = child.getOrDefault("identifier", "").asInstanceOf[String]
               if (levelId.nonEmpty) {
                 levelIds += levelId
-                // Normal child courses
-                val levelChildren = child.getOrDefault("children", java.util.Collections.emptyList[java.util.Map[String, AnyRef]]()).asInstanceOf[java.util.List[java.util.Map[String, AnyRef]]]
-                levelChildren.asScala.foreach { sub =>
-                  val subPc = sub.getOrDefault("primaryCategory", "").asInstanceOf[String]
-                  if (subPc.equalsIgnoreCase("Course")) {
-                    val courseId = sub.getOrDefault("identifier", "").asInstanceOf[String]
-                    if (courseId.nonEmpty) courseToLevel += (courseId -> levelId)
+                val picked = extractExamCourseIds(child, enrollmentType)
+                picked.foreach { id =>
+                  if (id != null && id.nonEmpty) examCourseIds += id
+                }
+                val levelChildren = child.getOrDefault("children", java.util.Collections.emptyList()).asInstanceOf[java.util.List[java.util.Map[String, AnyRef]]]
+                levelChildren.asScala.foreach { ch =>
+                  val cpc = ch.getOrDefault("primaryCategory", "").asInstanceOf[String]
+                  if (cpc.equalsIgnoreCase("Course")) {
+                    val cid = ch.getOrDefault("identifier", "").asInstanceOf[String]
+                    if (cid.nonEmpty) courseToLevel.put(cid, levelId)
                   }
                 }
-                // Exam related courses (levelExam / entranceExam)
-                val examIds = extractExamCourseIds(child, enrollmentType)
-                examIds.foreach(exId => examCourseIds += exId)
               }
             }
           }
-
-          logger.info(s"Extracted CF data. levels=${levelIds.size}, courses=${courseToLevel.size}, examCourses=${examCourseIds.size}")
-          logger.info(s"Course->Level: ${courseToLevel.toMap} examCourses=${examCourseIds.mkString(",")}")
 
           createBatchesForHierarchy(cfBatchId, levelIds.toList, courseToLevel.toMap, examCourseIds.toSet, event)
           // Emit an event to trigger CF batch cache build in Redis
@@ -131,6 +129,8 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
           context.output(config.batchCacheOutputTag, cacheEvent)
           metrics.incCounter(config.processedEventCount)
         }
+      } else {
+        logger.warn(s"Unsupported activity type: $activityType for event: $event")
       }
   } catch {
       case e: Exception =>
@@ -149,21 +149,23 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
       val batchId = generateBatchId(cfBatchId, levelId)
       val body = buildBatchRequestBody(event, levelId, "Competency Level", batchId)
       logger.info(s"Prepared Competency Level batch payload: $body for levelId=$levelId")
+      // store mapping immediately
+      try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, levelId, "Competency Level") catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$levelId type=Competency Level", ex) }
       callBatchCreateApi(body, clBatchCreateEndpoint)
     }
-    // Standard courses
     courseToLevel.foreach { case (courseId, levelId) =>
       val batchId = generateBatchId(cfBatchId, courseId)
       val body = buildBatchRequestBody(event, courseId, "Course", batchId)
       logger.info(s"Prepared Course batch payload: $body for courseId=$courseId (levelId=$levelId)")
+      try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, courseId, "Course") catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$courseId type=Course", ex) }
       callBatchCreateApi(body, courseBatchCreateEndpoint)
     }
-    // Exam courses (avoid duplicates already in courseToLevel)
     examCourseIds.foreach { exId =>
       if (!courseToLevel.contains(exId)) {
         val batchId = generateBatchId(cfBatchId, exId)
         val body = buildBatchRequestBody(event, exId, "Course", batchId)
         logger.info(s"Prepared Exam Course batch payload: $body for courseId=$exId")
+        try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, exId, "Course") catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$exId type=Course", ex) }
         callBatchCreateApi(body, courseBatchCreateEndpoint)
       }
     }
@@ -210,26 +212,6 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
   private def generateBatchId(cfBatchId: String, id: String): String = s"$cfBatchId:$id"
 
   private def getHierarchyWithCache(activityId: String): java.util.Map[String, AnyRef] = {
-    if (hierarchyCache != null) {
-      val key = s"hierarchy:$activityId"
-      try {
-        val cachedJson = hierarchyCache.getWithRetry(key)
-        if (cachedJson != null && !cachedJson.isEmpty) {
-          val mapper = new ObjectMapper()
-          val json = cachedJson.get("hierarchy").map(_.asInstanceOf[String]).getOrElse("")
-          if (json.nonEmpty) return mapper.readValue(json, classOf[java.util.Map[String, AnyRef]])
-        }
-      } catch { case ex: Exception => logger.warn(s"Cache read failed for $activityId", ex) }
-    }
-    val hierarchy = hierarchyHelper.getHierarchy(activityId)
-    if (hierarchy != null && hierarchyCache != null) {
-      try {
-        val mapper = new ObjectMapper()
-        val json = mapper.writeValueAsString(hierarchy)
-        val value = s"""{"hierarchy":"${json.replace("\"", "\\\"")}"}"""
-        hierarchyCache.setWithRetry(s"hierarchy:$activityId", value)
-      } catch { case ex: Exception => logger.warn(s"Cache write failed for $activityId", ex) }
-    }
-    hierarchy
+    hierarchyHelper.getHierarchyWithCache(activityId, hierarchyCache)
   }
 }
