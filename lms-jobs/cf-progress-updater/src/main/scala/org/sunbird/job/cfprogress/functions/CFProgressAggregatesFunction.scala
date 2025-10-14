@@ -186,6 +186,44 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
     }
 
     /**
+     * Fetch optional_batches for a given user/activity/batch from user_enrolments
+     *
+     * @param userId       The user ID
+     * @param activityId   The activity ID
+     * @param activityType The activity type
+     * @param batchId      The batch ID (parent)
+     * @param metrics      Metrics object to track DB operations
+     * @return Set of optional batch IDs (empty if none)
+     */
+    private def fetchOptionalBatches(userId: String, activityId: String, activityType: String, batchId: String, metrics: Metrics): Set[String] = {
+        val columns: Map[String, AnyRef] = Map(
+            "userid" -> userId,
+            "activityid" -> activityId,
+            "activitytype" -> activityType,
+            "batchid" -> batchId
+        )
+
+        val rows: List[Row] = Option(readFromDB(columns, config.collectionTrackingKeyspace, config.collectionEnrolmentsTable, metrics))
+            .getOrElse(List.empty[Row])
+
+        if (rows.isEmpty) {
+            logger.info("No user_enrolments row found for optional_batches - userId: {}, activityId: {}, activityType: {}, batchId: {}", userId, activityId, activityType, batchId)
+            Set.empty[String]
+        } else {
+            val row = rows.head
+            try {
+                val optional: java.util.List[String] = row.getList("optional_batches", classOf[String])
+                if (optional == null) Set.empty[String] else optional.asScala.toSet
+            } catch {
+                case _: Exception =>
+                    // If column doesn't exist or is different type, treat as empty
+                    logger.warn("Failed to read optional_batches; treating as empty - userId: {}, activityId: {}, activityType: {}, batchId: {}", userId, activityId, activityType, batchId)
+                    Set.empty[String]
+            }
+        }
+    }
+
+    /**
      * Compute progress for a parent batch based on completed child batches
      *
      * @param batchMetadata     Batch metadata containing batchId, activityId and activityType
@@ -204,10 +242,14 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
         if (leafNodeIds == null || leafNodeIds.isEmpty) {
             throw new RuntimeException(s"Cache missing or empty for key: ${parentId}-${config.leafNodes}. ParentId ${parentId} must have leafNodeIds.")
         }
-        
-        // Compute intersection of leafNodeIds and completed batchIds
+
+        // Compute effective completion set: completed + optional
+        val optionalBatchIds: Set[String] = fetchOptionalBatches(userId, activityId, activityType, parentId, metrics)
+        val effectiveCompletedBatchIds: Set[String] = completedBatchIds.union(optionalBatchIds)
+
+        // Compute intersection of leafNodeIds and effective completed batchIds
         val leafNodeIdSet = leafNodeIds.toSet
-        val completedBatchIdsForParent = leafNodeIdSet.intersect(completedBatchIds).toList
+        val completedBatchIdsForParent = leafNodeIdSet.intersect(effectiveCompletedBatchIds).toList
         val completedCount = completedBatchIdsForParent.size
         val totalCount = leafNodeIdSet.size
         val progressPercentage = if (totalCount > 0) Math.ceil(completedCount * 100.0 / totalCount).toInt else 0
