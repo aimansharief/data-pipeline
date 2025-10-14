@@ -6,6 +6,7 @@ import com.typesafe.config.Config
 import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.api.java.typeutils.TypeExtractor
 import org.sunbird.dp.core.job.BaseJobConfig
+import org.apache.flink.streaming.api.scala.OutputTag
 
 class CFProgressUpdaterConfig(override val config: Config) extends BaseJobConfig(config, "cf-progress-updater") {
 
@@ -16,6 +17,7 @@ class CFProgressUpdaterConfig(override val config: Config) extends BaseJobConfig
 
   // Kafka Topics Configuration
   val kafkaInputTopic: String = config.getString("kafka.input.topic")
+  val kafkaAuditEventTopic: String = if (config.hasPath("kafka.output.audit.topic")) config.getString("kafka.output.audit.topic") else "dev.cf.progress.audit"
   override val kafkaConsumerParallelism: Int = config.getInt("task.consumer.parallelism")
 
   // Metric List
@@ -58,5 +60,12 @@ class CFProgressUpdaterConfig(override val config: Config) extends BaseJobConfig
   // Hardcoded values for parent progress tracking
   val parentActivityId: String = "collection-framework"
   val parentActivityType: String = "CollectionFramework"
+
+  // Side output tags
+  val auditEventOutputTagName: String = "cf-progress-audit-events"
+  val auditEventOutputTag: OutputTag[String] = new OutputTag[String](auditEventOutputTagName)
+
+  // Feature flags
+  val activityProgressAuditEnabled: Boolean = if (config.hasPath("activity.progress.audit.enabled")) config.getBoolean("activity.progress.audit.enabled") else false
 
 }

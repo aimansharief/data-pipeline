@@ -5,6 +5,7 @@ import com.datastax.driver.core.querybuilder.{QueryBuilder, Select, Update}
 import org.apache.commons.collections.CollectionUtils
 import org.apache.commons.lang3.StringUtils
 import org.apache.flink.api.common.typeinfo.TypeInformation
+import com.google.gson.Gson
 import org.apache.flink.configuration.Configuration
 import org.apache.flink.streaming.api.functions.ProcessFunction
 import org.slf4j.LoggerFactory
@@ -23,6 +24,7 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
     extends BaseProcessFunction[Event, String](config) {
 
     private[this] val logger = LoggerFactory.getLogger(classOf[CFProgressAggregatesFunction])
+    lazy private val gson = new Gson()
     private val allowedActions = List("enrol-complete")
     
     private var cache: DataCache = _
@@ -78,6 +80,11 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
                     
                     // Update the parent progress in the database
                     updateParentProgress(parentProgressList, metrics)
+
+                    //Generate AUDIT event for all the Activity completion and side-output to Kafka (gated by config)
+                    if (config.activityProgressAuditEnabled) {
+                        generateActivityCompletionAuditEvent(parentProgressList, event, context)(metrics)
+                    }
                 } else {
                     logger.warn(s"Ancestors is empty for key: ${event.batchId}-${config.ancestors} and userId: ${event.userId}")
                     metrics.incCounter(config.skippedEventCount)
@@ -295,6 +302,44 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
                     logger.info("Query: {}", query.toString)
                 })
             }
+        }
+    }
+
+    /**
+     * Generate CF audit events for entries with status=2 (completed)
+     * edata.type = activity-complete
+     * cdata includes Activity, activityType and CourseBatch identifiers
+     */
+    private def generateActivityCompletionAuditEvent(parentProgressList: List[Map[String, AnyRef]], sourceEvent: Event, context: ProcessFunction[Event, String]#Context)(metrics: Metrics) = {
+        import org.sunbird.dp.core.util.JSONUtil
+        import org.sunbird.job.cfprogress.domain.{TelemetryEvent, ActorObject, EventData, EventContext, EventObject}
+        val completed = parentProgressList.filter(m => m.contains("completedon"))
+        completed.map { m =>
+            val userId = m("userid").toString
+            val activityId = m("activityid").toString
+            val activityType = m("activitytype").toString
+            val batchId = m("batchid").toString
+
+            val ctx = EventContext(
+                channel = sourceEvent.readOrDefault[String]("context.channel", "in.sunbird"),
+                env = sourceEvent.readOrDefault[String]("context.env", "CF"),
+                sid = sourceEvent.readOrDefault[String]("context.sid", java.util.UUID.randomUUID().toString),
+                did = sourceEvent.readOrDefault[String]("context.did", java.util.UUID.randomUUID().toString),
+                cdata = Array(
+                    Map("type" -> "Activity", "id" -> activityId),
+                    Map("type" -> "ActivityType", "id" -> activityType),
+                    Map("type" -> "Batch", "id" -> batchId)
+                ).map(_.asJava)
+            )
+
+            val auditEvent = TelemetryEvent(
+                actor = ActorObject(id = userId),
+                edata = EventData(props = Array("completedon"), `type` = "activity-complete"),
+                context = ctx,
+                `object` = EventObject(id = userId, `type` = "User", rollup = Map("l1" -> activityId).asJava)
+            )
+            logger.info("audit event =>"+gson.toJson(auditEvent))
+            context.output(config.auditEventOutputTag, gson.toJson(auditEvent))
         }
     }
 

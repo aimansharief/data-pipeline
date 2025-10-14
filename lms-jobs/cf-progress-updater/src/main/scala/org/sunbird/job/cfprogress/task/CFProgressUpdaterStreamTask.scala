@@ -21,12 +21,15 @@ class CFProgressUpdaterStreamTask(config: CFProgressUpdaterConfig, kafkaConnecto
     implicit val stringTypeInfo: TypeInformation[String] = TypeExtractor.getForClass(classOf[String])
     val source = kafkaConnector.kafkaJobRequestSource[Event](config.kafkaInputTopic)
 
-    env.addSource(source).name(config.cfProgressConsumer)
+    val processed = env.addSource(source).name(config.cfProgressConsumer)
       .uid(config.cfProgressConsumer).setParallelism(config.kafkaConsumerParallelism)
       .rebalance
       .process(new CFProgressAggregatesFunction(config))
       .name("cf-progress-updater").uid("cf-progress-updater")
       .setParallelism(config.parallelism)
+
+    // Side output: audit events -> Kafka string sink
+    processed.getSideOutput(config.auditEventOutputTag).addSink(kafkaConnector.kafkaStringSink(config.kafkaAuditEventTopic))
 
     env.execute(config.jobName)
   }
