@@ -79,6 +79,9 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   val cfHierarchyRedisPort: Int = if (config.hasPath("redis.port")) config.getInt("redis.port") else 6379
   val cfHierarchyRedisDb: Int = if (config.hasPath("redis.database.index")) config.getInt("redis.database.index") else 6
 
+  // Single TTL (seconds) for all Redis data in this job
+  val redisTtlSeconds: Int = if (config.hasPath("redis.ttl")) config.getInt("redis.ttl") else 86400
+
   // Search Service Configuration
   val searchBasePath: String = if (config.hasPath("service.search.basePath")) config.getString("service.search.basePath") else "http://search-service:9000"
 

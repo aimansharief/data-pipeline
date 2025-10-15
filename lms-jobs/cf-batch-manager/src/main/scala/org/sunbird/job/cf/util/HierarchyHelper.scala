@@ -7,6 +7,7 @@ import org.apache.commons.collections.CollectionUtils
 import org.apache.commons.lang3.StringUtils
 import org.slf4j.LoggerFactory
 import org.sunbird.dp.core.util.CassandraUtil
+import org.sunbird.dp.core.cache.DataCache
 
 import scala.collection.JavaConverters._
 
@@ -39,7 +40,7 @@ class HierarchyHelper(@transient private val cassandraUtil: CassandraUtil,
   def getHierarchyWithCache(activityId: String, cache: DataCache): java.util.Map[String, AnyRef] = {
     if (cache != null && StringUtils.isNotBlank(activityId)) {
       try {
-        val cached = cache.getWithRetryCasePreserved(activityId)
+        val cached = cache.getWithRetry(activityId)
         if (cached != null && !cached.isEmpty) {
           val jMap = new java.util.HashMap[String, AnyRef]()
           cached.foreach { case (k, v) => jMap.put(k, v.asInstanceOf[AnyRef]) }

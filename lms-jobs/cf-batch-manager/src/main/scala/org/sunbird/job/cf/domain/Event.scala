@@ -7,7 +7,6 @@ import scala.collection.JavaConverters._
 class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long)
   extends JobRequest(eventMap, partition, offset) with Serializable {
 
-  // Normalize context.cdata (supports java.util.List / scala Iterable, and single Map in either java/scala)
   private val cdataList: List[Map[String, AnyRef]] = read[Any]("context.cdata") match {
     case Some(list: java.util.List[_]) =>
       list.asScala.collect { case m: util.Map[_, _] => toScalaMap(m) }.toList
@@ -28,7 +27,10 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long)
   }.filter(_.nonEmpty)
 
   // Basic fields
-  def action: String = readOrDefault[String]("edata.action", "")
+  def action: String = {
+    val a = readOrDefault[String]("edata.action", "").trim
+    if (a.nonEmpty) a else readOrDefault[String]("edata.type", "").trim
+  }
   def activityType: String = readOrDefault[String]("edata.activityType", "Competency Framework")
 
   // IDs (prefer edata, fallback to cdata, then object)
@@ -75,10 +77,24 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long)
   def createdBy: String = readOrDefault[String]("edata.createdBy", "system")
   def createdFor: List[String] = readOrDefault[List[String]]("edata.createdFor", Nil)
 
-  // Legacy accessors
-  def eData: Map[String, AnyRef] = readOrDefault[Map[String, AnyRef]]("edata", Map.empty)
-  def contents: List[Map[String, AnyRef]] = readOrDefault[List[Map[String, AnyRef]]]("edata.contents", Nil)
-  def userData: Map[String, AnyRef] = readOrDefault[Map[String, AnyRef]]("edata.userData", Map.empty)
+  // Legacy accessors (robust conversion without unsafe casts)
+  def eData: Map[String, AnyRef] = read[Any]("edata") match {
+    case Some(m: java.util.Map[_, _]) => m.asInstanceOf[java.util.Map[Any, Any]].asScala.map { case (k, v) => k.toString -> (if (v == null) null else v.asInstanceOf[AnyRef]) }.toMap
+    case Some(m: scala.collection.Map[_, _]) => m.asInstanceOf[scala.collection.Map[Any, Any]].map { case (k, v) => k.toString -> (if (v == null) null else v.asInstanceOf[AnyRef]) }.toMap
+    case _ => Map.empty[String, AnyRef]
+  }
+
+  def contents: List[Map[String, AnyRef]] = read[Any]("edata.contents") match {
+    case Some(list: java.util.List[_]) => list.asScala.collect { case m: java.util.Map[_, _] => m.asInstanceOf[java.util.Map[Any, Any]].asScala.map { case (k, v) => k.toString -> (if (v == null) null else v.asInstanceOf[AnyRef]) }.toMap }.toList
+    case Some(list: Iterable[_]) => list.collect { case m: scala.collection.Map[_, _] @unchecked => m.asInstanceOf[scala.collection.Map[Any, Any]].map { case (k, v) => k.toString -> (if (v == null) null else v.asInstanceOf[AnyRef]) }.toMap }.toList
+    case _ => Nil
+  }
+
+  def userData: Map[String, AnyRef] = read[Any]("edata.userData") match {
+    case Some(m: java.util.Map[_, _]) => m.asInstanceOf[java.util.Map[Any, Any]].asScala.map { case (k, v) => k.toString -> (if (v == null) null else v.asInstanceOf[AnyRef]) }.toMap
+    case Some(m: scala.collection.Map[_, _]) => m.asInstanceOf[scala.collection.Map[Any, Any]].map { case (k, v) => k.toString -> (if (v == null) null else v.asInstanceOf[AnyRef]) }.toMap
+    case _ => Map.empty[String, AnyRef]
+  }
 
   // Validation
   def validate: Option[String] = {

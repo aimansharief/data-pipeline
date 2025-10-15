@@ -27,6 +27,7 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
   private val clBatchCreateEndpoint = config.lmsBasePath + config.clBatchCreateRoute
   private val courseBatchCreateEndpoint = config.lmsBasePath + config.courseBatchCreateRoute
   private val redisEnabled = true
+  private val cacheTtl = config.redisTtlSeconds
 
   override def open(parameters: Configuration): Unit = {
     super.open(parameters)
@@ -83,7 +84,7 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
     try {
       if (activityType.equalsIgnoreCase("Competency Framework")) {
         // Store the base batch mapping to CF upfront
-        try BatchMappingUtil.storeBatchMapping(hierarchyCache, cfBatchId, activityId, "Competency Framework") catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$cfBatchId id=$activityId type=Competency Framework", ex) }
+        try BatchMappingUtil.storeBatchMapping(hierarchyCache, cfBatchId, activityId, "Competency Framework", Some(cacheTtl)) catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$cfBatchId id=$activityId type=Competency Framework", ex) }
         val hierarchy = getHierarchyWithCache(activityId)
         if (hierarchy != null && !hierarchy.isEmpty) {
           logger.info(s"Hierarchy loaded for $activityId")
@@ -148,24 +149,21 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
     levelIds.foreach { levelId =>
       val batchId = generateBatchId(cfBatchId, levelId)
       val body = buildBatchRequestBody(event, levelId, "Competency Level", batchId)
-      logger.info(s"Prepared Competency Level batch payload: $body for levelId=$levelId")
       // store mapping immediately
-      try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, levelId, "Competency Level") catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$levelId type=Competency Level", ex) }
+      try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, levelId, "Competency Level", Some(cacheTtl)) catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$levelId type=Competency Level", ex) }
       callBatchCreateApi(body, clBatchCreateEndpoint)
     }
     courseToLevel.foreach { case (courseId, levelId) =>
       val batchId = generateBatchId(cfBatchId, courseId)
       val body = buildBatchRequestBody(event, courseId, "Course", batchId)
-      logger.info(s"Prepared Course batch payload: $body for courseId=$courseId (levelId=$levelId)")
-      try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, courseId, "Course") catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$courseId type=Course", ex) }
+      try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, courseId, "Course", Some(cacheTtl)) catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$courseId type=Course", ex) }
       callBatchCreateApi(body, courseBatchCreateEndpoint)
     }
     examCourseIds.foreach { exId =>
       if (!courseToLevel.contains(exId)) {
         val batchId = generateBatchId(cfBatchId, exId)
         val body = buildBatchRequestBody(event, exId, "Course", batchId)
-        logger.info(s"Prepared Exam Course batch payload: $body for courseId=$exId")
-        try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, exId, "Course") catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$exId type=Course", ex) }
+        try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, exId, "Course", Some(cacheTtl)) catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$exId type=Course", ex) }
         callBatchCreateApi(body, courseBatchCreateEndpoint)
       }
     }

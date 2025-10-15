@@ -142,6 +142,19 @@ class DataCache(val config: BaseJobConfig, val redisConnect: RedisConnect, val d
     redisConnection.set(key, value)
   }
 
+  // New: set with TTL (seconds). Falls back to simple set if ttlSeconds <= 0. Retries on connection errors.
+  def setWithExpiry(key: String, value: String, ttlSeconds: Int): Unit = {
+    try {
+      if (ttlSeconds > 0) redisConnection.setex(key, ttlSeconds, value) else redisConnection.set(key, value)
+    } catch {
+      case ex@(_: JedisConnectionException | _: JedisException) =>
+        logger.error("Exception when update data to redis cache with expiry", ex)
+        this.redisConnection.close()
+        this.redisConnection = redisConnect.getConnection(dbIndex)
+        if (ttlSeconds > 0) redisConnection.setex(key, ttlSeconds, value) else redisConnection.set(key, value)
+    }
+  }
+
   def sMembers(key: String): util.Set[String] = {
     redisConnection.smembers(key)
   }

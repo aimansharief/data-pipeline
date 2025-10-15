@@ -141,7 +141,7 @@ class CFBatchCacheUpdate(config: CfBatchManagerConfig)
       val cfId = Option(event.activityId).getOrElse("")
       val baseBatchId = Option(event.batchId).getOrElse("")
       if (cfId.nonEmpty && baseBatchId.nonEmpty) {
-        val hierarchy = hierarchyHelper.getHierarchy(cfId)
+        val hierarchy = hierarchyHelper.getHierarchyWithCache(cfId, hierarchyCache)
         if (hierarchy != null && !hierarchy.isEmpty) {
           val leafNodesMap: Map[String, List[String]] = getLeafNodes(hierarchy, baseBatchId)
           val ancestorsMap: Map[String, List[String]] = getAncestors(hierarchy, cfId, baseBatchId)
