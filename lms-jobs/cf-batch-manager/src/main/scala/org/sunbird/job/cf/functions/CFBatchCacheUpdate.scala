@@ -55,8 +55,7 @@ class CFBatchCacheUpdate(config: CfBatchManagerConfig)
         v match {
           case list: List[_] =>
             val strList = list.asInstanceOf[List[String]]
-            // DataCache in dp-core does not support list ops; store as JSON string
-            cache.setWithRetry(finalPrefix + k + finalSuffix, strList.mkString(","))
+            cache.createListWithRetry(finalPrefix + k + finalSuffix, strList)
           case s: String =>
             cache.setWithRetry(finalPrefix + k + finalSuffix, s)
           case other =>
@@ -151,7 +150,7 @@ class CFBatchCacheUpdate(config: CfBatchManagerConfig)
             // Root-level leafnodes key: <batchId>-leafnodes, values are baseBatchId:courseId entries
             val allCourses = getAllCoursesUnderCF(hierarchy, baseBatchId)
             val rootKey = s"${baseBatchId}-leafnodes"
-            if (allCourses.nonEmpty) hierarchyCache.setWithRetry(rootKey, allCourses.mkString(","))
+            if (allCourses.nonEmpty) hierarchyCache.createListWithRetry(rootKey, allCourses)
           }
           val clCount = leafNodesMap.size
           val totalCourses = leafNodesMap.values.map(_.size).sum
