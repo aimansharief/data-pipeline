@@ -85,4 +85,7 @@ class CfBatchManagerConfig(override val config: Config) extends BaseJobConfig(co
   // Search Service Configuration
   val searchBasePath: String = if (config.hasPath("service.search.basePath")) config.getString("service.search.basePath") else "http://search-service:9000"
 
+  val esBasePath: String = if (config.hasPath("es.basePath")) config.getString("es.basePath") else "http://elasticsearch:9200"
+  val esActivityBatchIndex: String = if (config.hasPath("es.activityBatch.index")) config.getString("es.activityBatch.index") else "activity-batch"
+
 }

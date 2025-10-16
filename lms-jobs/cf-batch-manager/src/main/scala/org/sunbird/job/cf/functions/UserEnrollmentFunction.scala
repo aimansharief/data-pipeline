@@ -37,6 +37,50 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
   private val searchUrl = config.searchBasePath + "/v3/search"
   private val OE_KEY_PREFIX = "oe:"
 
+  // Helper: ES fallback to resolve CF Id by base batch id
+  private def resolveCfIdFromES(baseBatch: String): String = {
+    if (baseBatch == null || baseBatch.isEmpty) return ""
+    val url = s"${config.esBasePath}/${config.esActivityBatchIndex}/_search"
+    val body = s"""{
+                   |  "_source": ["activityId", "activityType"],
+                   |  "query": { "term": { "batchId.raw": "${baseBatch}" } }
+                   |}""".stripMargin
+    try {
+      logger.info(s"ESLookup.Request baseBatch=$baseBatch url=$url body=$body")
+      val resp = httpUtil.post(url, body, Map("Content-Type" -> "application/json"))
+      logger.info(s"ESLookup.Response baseBatch=$baseBatch status=${resp.status} body=${resp.body}")
+      val cfId = extractCfIdFromESResponse(resp.body)
+      if (cfId.nonEmpty) logger.info(s"ESLookup.Success baseBatch=$baseBatch cfId=$cfId") else logger.warn(s"ESLookup.NotFound baseBatch=$baseBatch")
+      cfId
+    } catch {
+      case ex: Exception =>
+        logger.warn(s"ESLookup.Failed baseBatch=$baseBatch", ex)
+        ""
+    }
+  }
+
+  // Helper: parse ES search response and return CF Id when activityType is Competency Framework
+  private def extractCfIdFromESResponse(jsonStr: String): String = {
+    try {
+      val root = objectMapper.readTree(jsonStr)
+      val hits = Option(root.get("hits")).flatMap(h => Option(h.get("hits"))).orNull
+      if (hits != null && hits.size() > 0) {
+        val first = hits.get(0)
+        val source = Option(first.get("_source")).orNull
+        if (source != null) {
+          val at = Option(source.get("activityType")).map(_.asText()).getOrElse("")
+          val id = Option(source.get("activityId")).map(_.asText()).getOrElse("")
+          if (id.nonEmpty && at.equalsIgnoreCase("Competency Framework")) return id
+        }
+      }
+      ""
+    } catch {
+      case ex: Exception =>
+        logger.warn("ESLookup.ParseFailed", ex)
+        ""
+    }
+  }
+
   private def mergeAndPersistOptional(userId: String, cfId: String, baseBatch: String, newOptionals: Set[String]): Set[String] = {
     if (newOptionals == null || newOptionals.isEmpty) return optionalCache.getOrElse(optKey(userId, cfId, baseBatch), Set.empty)
     val key = optKey(userId, cfId, baseBatch)
@@ -129,6 +173,8 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
             logger.warn(s"CFIdResolveNoMapping mid=${event.mid()} base=$base")
         }
       } catch { case ex: Exception => logger.error(s"CFIdRedisError baseBatch=$base", ex) }
+      val esId = resolveCfIdFromES(base)
+      if (esId.nonEmpty) return esId
     } else logger.warn(s"CFIdResolveSkipRedis mid=${event.mid()} baseEmptyOrCacheNull base=$base cacheNull=${hierarchyCache==null}")
     logger.warn(s"CFIdResolveFailed mid=${event.mid()} courseId=$courseId batchId=${event.batchId} baseBatch=$base")
     ""
@@ -283,8 +329,17 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
         logger.info(s"PostEntranceExamTransition cf=$resolvedCfId cl=${clStruct.id} note=Not re-enrolling entrance exam; proceeding to optional/non-optional/level-exam")
         originalUsers
       case _ =>
-        val required = if (originalUsers == null) Nil else originalUsers.filterNot(u => isOptional(u, resolvedCfId, cfBatchId, event.courseId))
-        if (required.isEmpty) { logger.info(s"SkipOptionalCourseCompletion strategy=${strategy.name} course=${event.courseId} cf=$resolvedCfId totalUsers=${Option(originalUsers).map(_.size).getOrElse(0)} message=optional course completion does not advance progression"); return }
+        val required = if (originalUsers == null) Nil else {
+          // Only Progress Based and Entrance Exam Based consider optionality to gate progression
+          strategy match {
+            case _: ProgressBasedStrategy | _: EntranceExamBasedStrategy => originalUsers.filterNot(u => isOptional(u, resolvedCfId, cfBatchId, event.courseId))
+            case _ => originalUsers
+          }
+        }
+        if (required.isEmpty && (strategy.isInstanceOf[ProgressBasedStrategy] || strategy.isInstanceOf[EntranceExamBasedStrategy])) {
+          logger.info(s"SkipOptionalCourseCompletion strategy=${strategy.name} course=${event.courseId} cf=$resolvedCfId totalUsers=${Option(originalUsers).map(_.size).getOrElse(0)} message=optional course completion does not advance progression")
+          return
+        }
         required
     }
     if (enrollmentType == "Progress Based") {
@@ -328,11 +383,12 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
         val needUsers = strategy.filterUsersForCourse(cid, resolvedCfId, cfBatchId, users)
         if (needUsers.nonEmpty) {
           enrollCLIfTransition(clId)
-          if (strategy.isInstanceOf[EntranceExamBasedStrategy]) {
+          // Enroll optional courses in parallel for both Entrance Exam Based and Progress Based strategies
+          if (strategy.isInstanceOf[EntranceExamBasedStrategy] || strategy.isInstanceOf[ProgressBasedStrategy]) {
             clStruct.courseIds.filter(_ != cid).foreach { optCid =>
               val optionalUsers = needUsers.filter(u => isOptional(u, resolvedCfId, cfBatchId, optCid))
               if (optionalUsers.nonEmpty) {
-                logger.info(s"EEOptional.EnrollParallelOptional baseCourse=$cid optionalCourse=$optCid users=${optionalUsers.mkString(",")}")
+                logger.info(s"ParallelOptional.Enroll baseCourse=$cid optionalCourse=$optCid users=${optionalUsers.mkString(",")}")
                 enrollActivity("Course", optCid, baseBatch, optionalUsers, s"phase=Progression optionalInParallel baseCourse=$cid cl=$clId")
               }
             }
@@ -344,7 +400,7 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
               enrollActivity("Course", clStruct.levelExamId, baseBatch, optionalUsers, s"phase=Progression entranceExamOptionalAutoLevelExam cl=$clId course=$cid fromEntranceExam strategy=${strategy.name}")
             }
           }
-        } else if (strategy.isInstanceOf[ProgressBasedStrategy] || strategy.isInstanceOf[EntranceExamBasedStrategy]) advancePastOptional(cid, clStruct, orderedCLs, structures, resolvedCfId, users, baseBatch, enrollmentType)
+        } else if (strategy.isInstanceOf[ProgressBasedStrategy] || strategy.isInstanceOf[EntranceExamBasedStrategy] || strategy.isInstanceOf[FullEnrollmentStrategy]) advancePastOptional(cid, clStruct, orderedCLs, structures, resolvedCfId, users, baseBatch, enrollmentType)
       case NextLevelExam(eid, clId) => enrollActivity("Course", eid, baseBatch, users, s"phase=Progression next=LevelExam cl=$clId from=${event.courseId} strategy=${strategy.name}")
       case NextCL(nextClId) => if (users != null && users.nonEmpty) startNextCLWithStrategy(strategy, resolvedCfId, baseBatch, nextClId, structures, users)
       case CompletedCF => logger.info(s"ProgressionComplete cf=$resolvedCfId strategy=${strategy.name}")
@@ -557,9 +613,15 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
       if (clNodeOpt.isEmpty) { logger.warn(s"CLNodeNotFound cf=$cfId cl=${clStruct.id}"); return Map.empty }
       val clNode = clNodeOpt.get
 
+      def readOEs(node: java.util.Map[String, AnyRef]): Set[String] = {
+        val lc = Option(node.get("targetobservableElementIds").asInstanceOf[java.util.List[String]]).map(_.asScala.toSet).getOrElse(Set.empty[String])
+        val cc = Option(node.get("targetObservableElementIds").asInstanceOf[java.util.List[String]]).map(_.asScala.toSet).getOrElse(Set.empty[String])
+        val plain = Option(node.get("observableElementIds").asInstanceOf[java.util.List[String]]).map(_.asScala.toSet).getOrElse(Set.empty[String])
+        lc ++ cc ++ plain
+      }
+
       def collectAllOEs(node: java.util.Map[String, AnyRef]): Set[String] = {
-        val direct = Option(node.get("targetobservableElementIds").asInstanceOf[java.util.List[String]])
-          .map(_.asScala.toSet).getOrElse(Set.empty[String])
+        val direct = readOEs(node)
         childrenOf(node).foldLeft(direct) { (acc, ch) => acc ++ collectAllOEs(ch) }
       }
 
@@ -608,9 +670,10 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
       val response = httpUtil.post(searchUrl, request, Map("Content-Type" -> "application/json"))
       logger.info(s"OESearchResponse qId=$questionId status=${response.status} body=${response.body}")
       val json = objectMapper.readTree(response.body)
-      val items = Option(json.get("result")).map(_.get("items")).orElse(Option(json.get("result").get("content"))).orNull
-      if (items != null && items.size() > 0) {
-        val oesNode = items.get(0).get("observableElementIds")
+      val resultNode = Option(json.get("result"))
+      val itemsNode = resultNode.flatMap(r => Option(r.get("items")).orElse(Option(r.get("content")))).orNull
+      if (itemsNode != null && itemsNode.size() > 0) {
+        val oesNode = itemsNode.get(0).get("observableElementIds")
         val oes = if (oesNode != null) oesNode.asScala.map(_.asText()).toList else Nil
         val value = s"""{"observableElementIds":${oes.map(o => "\""+o+"\"").mkString("[", ",", "]")}}"""
         val ttl = config.redisTtlSeconds
@@ -699,29 +762,21 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
     val name = "Full Enrollment"
     def initialEnroll(event: Event, cfId: String, baseBatch: String, orderedCLs: List[CLNode], structures: Map[String, CLStructure]): Unit = {
       val firstStruct = firstCLOptStruct(orderedCLs, structures); if (firstStruct.isEmpty) return
-      val firstId = firstStruct.get.id
+      val cl = firstStruct.get
+      val firstId = cl.id
       val targetUsers = filterUsersNeedingCL(cfId, firstId, event.batchId, event.userIds)
       if (targetUsers.nonEmpty) {
         enrollActivity("Competency Level", firstId, baseBatch, targetUsers, s"phase=Initial type=$name")
-        firstStruct.get.courseIds.headOption.foreach(cid => enrollActivity("Course", cid, baseBatch, targetUsers, s"phase=Initial type=$name cl=$firstId firstCourse"))
+        // Full Enrollment: always enroll the first course, irrespective of optionality
+        cl.courseIds.headOption.foreach(cid => enrollActivity("Course", cid, baseBatch, targetUsers, s"phase=Initial type=$name cl=$firstId firstCourse"))
       }
     }
     def startCL(cfId: String, baseBatch: String, clId: String, structures: Map[String, CLStructure], users: List[String]): Unit = {
       val clStructOpt = structures.get(clId); if (clStructOpt.isEmpty || users == null || users.isEmpty) return
       val clStruct = clStructOpt.get
       enrollActivity("Competency Level", clId, baseBatch, users, s"phase=Progression startCL type=$name")
-      val allOptional = clStruct.courseIds.nonEmpty && users.nonEmpty && clStruct.courseIds.forall(c => users.forall(u => isOptional(u, cfId, baseBatch, c)))
-      if (allOptional) {
-        if (clStruct.levelExamId != null) enrollActivity("Course", clStruct.levelExamId, baseBatch, users, s"phase=Progression type=$name levelExamAfterAllOptional cl=$clId")
-      } else {
-        clStruct.courseIds.headOption match {
-          case Some(first) =>
-            val eligible = users.filterNot(u => isOptional(u, cfId, baseBatch, first))
-            if (eligible.nonEmpty) enrollActivity("Course", first, baseBatch, eligible, s"phase=Progression startFirstCourse cl=$clId type=$name")
-            else if (clStruct.levelExamId != null) enrollActivity("Course", clStruct.levelExamId, baseBatch, users, s"phase=Progression levelExamFallback cl=$clId type=$name")
-          case None => if (clStruct.levelExamId != null) enrollActivity("Course", clStruct.levelExamId, baseBatch, users, s"phase=Progression levelExamOnly cl=$clId type=$name")
-        }
-      }
+      // Full Enrollment: always start with the first course, irrespective of optionality
+      clStruct.courseIds.headOption.foreach(cid => enrollActivity("Course", cid, baseBatch, users, s"phase=Progression startFirstCourse cl=$clId type=$name"))
     }
   }
 
@@ -739,6 +794,12 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
           cl.courseIds.foreach(c => enrollActivity("Course", c, baseBatch, targetUsers, s"phase=Initial type=$name replayOptional cl=$firstId course=$c"))
           if (cl.levelExamId != null) enrollActivity("Course", cl.levelExamId, baseBatch, targetUsers, s"phase=Initial type=$name levelExamAfterAllOptional cl=$firstId")
         } else {
+          cl.courseIds.foreach { c =>
+            val optionalUsers = targetUsers.filter(u => optionalByUser.getOrElse(u, Set.empty).contains(c))
+            if (optionalUsers.nonEmpty) {
+              enrollActivity("Course", c, baseBatch, optionalUsers, s"phase=Initial type=$name optionalParallel cl=$firstId course=$c")
+            }
+          }
           val (maybeCourse, eligible) = firstNonOptionalCourseForUsers(cl, optionalByUser, targetUsers)
           maybeCourse match {
             case Some(cid) => enrollActivity("Course", cid, baseBatch, eligible, s"phase=Initial type=$name cl=$firstId firstNonOptionalCourse")
@@ -756,12 +817,28 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
         cl.courseIds.foreach(c => enrollActivity("Course", c, baseBatch, users, s"phase=Progression type=$name replayOptional cl=$clId course=$c"))
         if (cl.levelExamId != null) enrollActivity("Course", cl.levelExamId, baseBatch, users, s"phase=Progression type=$name levelExamAfterAllOptional cl=$clId")
       } else {
-        cl.courseIds.headOption match {
-          case Some(first) =>
-            val eligible = users.filterNot(u => isOptional(u, cfId, baseBatch, first))
-            if (eligible.nonEmpty) enrollActivity("Course", first, baseBatch, eligible, s"phase=Progression startFirstCourse cl=$clId type=$name")
-            else if (cl.levelExamId != null) enrollActivity("Course", cl.levelExamId, baseBatch, users, s"phase=Progression levelExamFallback cl=$clId type=$name")
-          case None => if (cl.levelExamId != null) enrollActivity("Course", cl.levelExamId, baseBatch, users, s"phase=Progression levelExamOnly cl=$clId type=$name")
+        // Enroll optional courses in parallel for users who have them optional
+        cl.courseIds.foreach { c =>
+          val optionalUsers = users.filter(u => isOptional(u, cfId, baseBatch, c))
+          if (optionalUsers.nonEmpty) {
+            enrollActivity("Course", c, baseBatch, optionalUsers, s"phase=Progression type=$name optionalParallel cl=$clId course=$c")
+          }
+        }
+        // BUGFIX: If the first course in CL is optional for all users, previously we fell back to level exam.
+        // Instead, find the first course in order that is non-optional for at least one user and enroll that.
+        val nextNonOptionalOpt = cl.courseIds.find(cid => users.exists(u => !isOptional(u, cfId, baseBatch, cid)))
+        nextNonOptionalOpt match {
+          case Some(cid) =>
+            val eligible = users.filter(u => !isOptional(u, cfId, baseBatch, cid))
+            if (eligible.nonEmpty) {
+              enrollActivity("Course", cid, baseBatch, eligible, s"phase=Progression startFirstNonOptionalCourse cl=$clId type=$name")
+            } else if (cl.levelExamId != null) {
+              enrollActivity("Course", cl.levelExamId, baseBatch, users, s"phase=Progression levelExamFallback cl=$clId type=$name")
+            }
+          case None =>
+            if (cl.levelExamId != null) {
+              enrollActivity("Course", cl.levelExamId, baseBatch, users, s"phase=Progression levelExamAfterAllOptional cl=$clId type=$name")
+            }
         }
       }
     }

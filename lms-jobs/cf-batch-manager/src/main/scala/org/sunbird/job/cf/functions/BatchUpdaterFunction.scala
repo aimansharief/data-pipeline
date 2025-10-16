@@ -27,7 +27,6 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
   private val clBatchCreateEndpoint = config.lmsBasePath + config.clBatchCreateRoute
   private val courseBatchCreateEndpoint = config.lmsBasePath + config.courseBatchCreateRoute
   private val redisEnabled = true
-  private val cacheTtl = config.redisTtlSeconds
 
   override def open(parameters: Configuration): Unit = {
     super.open(parameters)
@@ -83,8 +82,7 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
     metrics.incCounter(config.totalEventCount)
     try {
       if (activityType.equalsIgnoreCase("Competency Framework")) {
-        // Store the base batch mapping to CF upfront
-        try BatchMappingUtil.storeBatchMapping(hierarchyCache, cfBatchId, activityId, "Competency Framework", Some(cacheTtl)) catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$cfBatchId id=$activityId type=Competency Framework", ex) }
+        try BatchMappingUtil.storeBatchMapping(hierarchyCache, cfBatchId, activityId, "Competency Framework") catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$cfBatchId id=$activityId type=Competency Framework", ex) }
         val hierarchy = getHierarchyWithCache(activityId)
         if (hierarchy != null && !hierarchy.isEmpty) {
           logger.info(s"Hierarchy loaded for $activityId")
@@ -119,7 +117,6 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
           }
 
           createBatchesForHierarchy(cfBatchId, levelIds.toList, courseToLevel.toMap, examCourseIds.toSet, event)
-          // Emit an event to trigger CF batch cache build in Redis
           val eventMap = new java.util.HashMap[String, Any]()
           eventMap.putAll(event.getMap())
           val edata = new java.util.HashMap[String, Any]()
@@ -149,21 +146,20 @@ class BatchUpdaterFunction(config: CfBatchManagerConfig) extends BaseProcessFunc
     levelIds.foreach { levelId =>
       val batchId = generateBatchId(cfBatchId, levelId)
       val body = buildBatchRequestBody(event, levelId, "Competency Level", batchId)
-      // store mapping immediately
-      try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, levelId, "Competency Level", Some(cacheTtl)) catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$levelId type=Competency Level", ex) }
+      try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, levelId, "Competency Level") catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$levelId type=Competency Level", ex) }
       callBatchCreateApi(body, clBatchCreateEndpoint)
     }
     courseToLevel.foreach { case (courseId, levelId) =>
       val batchId = generateBatchId(cfBatchId, courseId)
       val body = buildBatchRequestBody(event, courseId, "Course", batchId)
-      try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, courseId, "Course", Some(cacheTtl)) catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$courseId type=Course", ex) }
+      try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, courseId, "Course") catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$courseId type=Course", ex) }
       callBatchCreateApi(body, courseBatchCreateEndpoint)
     }
     examCourseIds.foreach { exId =>
       if (!courseToLevel.contains(exId)) {
         val batchId = generateBatchId(cfBatchId, exId)
         val body = buildBatchRequestBody(event, exId, "Course", batchId)
-        try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, exId, "Course", Some(cacheTtl)) catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$exId type=Course", ex) }
+        try BatchMappingUtil.storeBatchMapping(hierarchyCache, batchId, exId, "Course") catch { case ex: Exception => logger.warn(s"BatchMappingStoreFailed batch=$batchId id=$exId type=Course", ex) }
         callBatchCreateApi(body, courseBatchCreateEndpoint)
       }
     }
