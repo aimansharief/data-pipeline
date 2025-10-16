@@ -84,14 +84,15 @@ object CFCacheUtil {
           val index = clMap.getOrElse("index", "0").toString.toInt
           val coursesStr = clMap.getOrElse("courses", "").toString
           val courses = if (coursesStr.nonEmpty) coursesStr.split(",").toList else Nil
-          val entranceExamId = clMap.getOrElse("entranceexamid", "").toString
-          val levelExamId = clMap.getOrElse("levelexamid", "").toString
+          // Read with camelCase first (as written), fallback to legacy lowercase keys if present
+          val entranceExamIdRaw = clMap.get("entranceExamId").orElse(clMap.get("entranceexamid")).map(_.toString).getOrElse("")
+          val levelExamIdRaw = clMap.get("levelExamId").orElse(clMap.get("levelexamid")).map(_.toString).getOrElse("")
           
-          val levelExam = if (levelExamId.nonEmpty) { 
-            val m = new java.util.HashMap[String, AnyRef](); m.put("collectionId", levelExamId); m 
+          val levelExam = if (levelExamIdRaw.nonEmpty) { 
+            val m = new java.util.HashMap[String, AnyRef](); m.put("collectionId", levelExamIdRaw); m 
           } else null
-          val entranceExam = if (entranceExamId.nonEmpty) { 
-            val m = new java.util.HashMap[String, AnyRef](); m.put("collectionId", entranceExamId); m.put("enabled", "Yes"); m 
+          val entranceExam = if (entranceExamIdRaw.nonEmpty) { 
+            val m = new java.util.HashMap[String, AnyRef](); m.put("collectionId", entranceExamIdRaw); m.put("enabled", "Yes"); m 
           } else null
           
           nodes += CLNode(clId, index)
@@ -114,8 +115,9 @@ object CFCacheUtil {
         val levelId = child.getOrDefault("identifier", "").asInstanceOf[String]
         if (levelId != null && levelId.nonEmpty) {
           val index = child.get("index") match {
-            case null => 0
-            case idx => idx.asInstanceOf[Int]
+            case d: java.lang.Double  => d.intValue()
+            case i: java.lang.Integer => i.intValue()
+            case _ => 0
           }
           
           val levelExam = if (child.containsKey("levelExam")) child.get("levelExam").asInstanceOf[java.util.Map[String, AnyRef]] else null

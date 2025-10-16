@@ -142,6 +142,19 @@ class DataCache(val config: BaseJobConfig, val redisConnect: RedisConnect, val d
     redisConnection.set(key, value)
   }
 
+  // New: set with TTL (seconds). Falls back to simple set if ttlSeconds <= 0. Retries on connection errors.
+  def setWithExpiry(key: String, value: String, ttlSeconds: Int): Unit = {
+    try {
+      if (ttlSeconds > 0) redisConnection.setex(key, ttlSeconds, value) else redisConnection.set(key, value)
+    } catch {
+      case ex@(_: JedisConnectionException | _: JedisException) =>
+        logger.error("Exception when update data to redis cache with expiry", ex)
+        this.redisConnection.close()
+        this.redisConnection = redisConnect.getConnection(dbIndex)
+        if (ttlSeconds > 0) redisConnection.setex(key, ttlSeconds, value) else redisConnection.set(key, value)
+    }
+  }
+
   def sMembers(key: String): util.Set[String] = {
     redisConnection.smembers(key)
   }
@@ -173,6 +186,27 @@ class DataCache(val config: BaseJobConfig, val redisConnect: RedisConnect, val d
     }
   }
 
+  /**
+   * The cache will be created by clearing the existing data from smembers.
+   * @param key
+   * @param value
+   */
+  def createListWithRetry(key: String, value: List[String]): Unit = {
+    try {
+      redisConnection.del(key)
+      redisConnection.sadd(key, value.map(_.asInstanceOf[String]): _*)
+    } catch {
+      // Write testcase for catch block
+      // $COVERAGE-OFF$ Disabling scoverage
+      case ex: JedisException => {
+        logger.error("Exception when inserting data to redis cache", ex)
+        this.redisConnection.close()
+        this.redisConnection = redisConnect.getConnection(dbIndex)
+        redisConnection.del(key)
+        redisConnection.sadd(key, value.map(_.asInstanceOf[String]): _*)
+      }
+    }
+  }
 
 }
 
