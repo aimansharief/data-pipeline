@@ -32,7 +32,8 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
   @transient private var userCourseStatusPs: PreparedStatement = _
   @transient private var updateOptionalPs: PreparedStatement = _
   @transient private var assessmentQuestionPs: PreparedStatement = _
-  @transient private var assessmentContentListPs: PreparedStatement = _
+  @transient private var assessmentContentListPs: PreparedStatement = _ 
+  @transient private var updateOptionalClPs: PreparedStatement = _
 
   private val searchUrl = config.searchBasePath + "/v3/search"
   private val OE_KEY_PREFIX = "oe:"
@@ -108,6 +109,18 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
     merged
   }
 
+  private def persistOptionalForCL(userId: String, clId: String, clBatchId: String, baseBatch: String, optionalCourseIds: Set[String]): Unit = {
+    if (optionalCourseIds == null || optionalCourseIds.isEmpty) return
+    try {
+      val encoded: java.util.List[String] = new java.util.ArrayList[String](optionalCourseIds.toList.map(cid => batchId(baseBatch, cid)).asJava)
+      logger.info(s"CQLExecute query='${updateOptionalClPs.getQueryString}' values=[${optionalCourseIds.mkString("|")},$userId,$clId,$clBatchId]")
+      val rs = cassandraUtil.session.execute(updateOptionalClPs.bind(encoded, userId, clId, clBatchId))
+      val applied = try { rs.wasApplied() } catch { case _: Throwable => true }
+      if (applied) logger.info(s"OptionalPersistedCL user=$userId cl=$clId clBatchId=$clBatchId count=${optionalCourseIds.size} list=${optionalCourseIds.mkString(",")}")
+      else logger.warn(s"OptionalCLUpdateNotApplied (row missing) user=$userId cl=$clId clBatchId=$clBatchId")
+    } catch { case ex: Exception => logger.error(s"OptionalCLPersistFailed user=$userId cl=$clId clBatchId=$clBatchId list=${optionalCourseIds.mkString(",")}", ex) }
+  }
+
   private def batchId(base: String, id: String) = EnrollmentApiUtil.generateBatchId(base, id)
   private def enrollActivity(activityType: String, activityId: String, baseBatch: String, users: List[String], note: String): Unit = {
     if (users != null && users.nonEmpty) {
@@ -127,6 +140,7 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
     cfStatusMapPs = cassandraUtil.session.prepare(s"select statusmap, optional_batches from ${config.sbCollectionKeyspace}.${config.sbCollectionTable} where userid=? and activityid=? and activitytype='Competency Framework' and batchid=?")
     userCourseStatusPs = cassandraUtil.session.prepare(s"select status from ${config.userEnrollKeyspace}.${config.userEnrollTable} where userid=? and courseid=?")
     updateOptionalPs = cassandraUtil.session.prepare(s"update ${config.sbCollectionKeyspace}.${config.sbCollectionTable} set optional_batches=? where userid=? and activityid=? and activitytype='Competency Framework' and batchid=? IF EXISTS")
+    updateOptionalClPs = cassandraUtil.session.prepare(s"update ${config.sbCollectionKeyspace}.${config.sbCollectionTable} set optional_batches=? where userid=? and activityid=? and activitytype='Competency Level' and batchid=? IF EXISTS")
     assessmentQuestionPs = cassandraUtil.session.prepare(s"select question, last_attempted_on, updated_on, attempt_id from ${config.assessmentAggKeyspace}.${config.assessmentAggTable} where course_id=? and batch_id=? and user_id=? and content_id=?")
     assessmentContentListPs = cassandraUtil.session.prepare(s"select content_id from ${config.assessmentAggKeyspace}.${config.assessmentAggTable} where course_id=? and batch_id=? and user_id=?")
     if (redisEnabled) {
@@ -352,6 +366,11 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
     nextAction match {
       case NextEntranceExamCompleted(clId) =>
         enrollActivity("Competency Level", clId, baseBatch, users, s"phase=Progression startCLAfterEntranceExam")
+        val clBatchId = batchId(baseBatch, clId)
+        users.foreach { u =>
+          val clOptionals = clStruct.courseIds.filter(c => isOptional(u, resolvedCfId, cfBatchId, c)).toSet
+          if (clOptionals.nonEmpty) persistOptionalForCL(u, clId, clBatchId, baseBatch, clOptionals)
+        }
         clStruct.courseIds.foreach { cid =>
           val optionalUsers = users.filter(u => isOptional(u, resolvedCfId, cfBatchId, cid))
           if (optionalUsers.nonEmpty) {
@@ -789,6 +808,11 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
       val targetUsers = filterUsersNeedingCL(cfId, firstId, event.batchId, event.userIds)
       if (targetUsers.nonEmpty) {
         enrollActivity("Competency Level", firstId, baseBatch, targetUsers, s"phase=Initial type=$name")
+        val clBatchId = batchId(baseBatch, firstId)
+        targetUsers.foreach { u =>
+          val clOptionals = optionalByUser.getOrElse(u, Set.empty).intersect(cl.courseIds.toSet)
+          if (clOptionals.nonEmpty) persistOptionalForCL(u, firstId, clBatchId, baseBatch, clOptionals)
+        }
         val allOptional = cl.courseIds.nonEmpty && targetUsers.nonEmpty && cl.courseIds.forall(c => targetUsers.forall(u => optionalByUser.getOrElse(u, Set.empty).contains(c)))
         if (allOptional) {
           cl.courseIds.foreach(c => enrollActivity("Course", c, baseBatch, targetUsers, s"phase=Initial type=$name replayOptional cl=$firstId course=$c"))
@@ -812,6 +836,11 @@ class UserEnrollmentFunction(config: CfBatchManagerConfig)
       val clStructOpt = structures.get(clId); if (clStructOpt.isEmpty || users == null || users.isEmpty) return
       val cl = clStructOpt.get
       enrollActivity("Competency Level", clId, baseBatch, users, s"phase=Progression startCL type=$name")
+      val clBatchId = batchId(baseBatch, clId)
+      users.foreach { u =>
+        val clOptionals = cl.courseIds.filter(c => isOptional(u, cfId, baseBatch, c)).toSet
+        if (clOptionals.nonEmpty) persistOptionalForCL(u, clId, clBatchId, baseBatch, clOptionals)
+      }
       val allOptional = cl.courseIds.nonEmpty && users.nonEmpty && cl.courseIds.forall(c => users.forall(u => isOptional(u, cfId, baseBatch, c)))
       if (allOptional) {
         cl.courseIds.foreach(c => enrollActivity("Course", c, baseBatch, users, s"phase=Progression type=$name replayOptional cl=$clId course=$c"))

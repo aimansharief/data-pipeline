@@ -253,7 +253,8 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
         // Compute effective completion set: completed + optional
         val optionalBatchIds: Set[String] = fetchOptionalBatches(userId, activityId, activityType, parentId, metrics)
         val effectiveCompletedBatchIds: Set[String] = completedBatchIds.union(optionalBatchIds)
-
+        logger.info("Optional Batch Ids: {}", optionalBatchIds.mkString(", "))
+        logger.info("Effective completed batchIds: {}", effectiveCompletedBatchIds.mkString(", "))
         // Compute intersection of leafNodeIds and effective completed batchIds
         val leafNodeIdSet = leafNodeIds.toSet
         val completedBatchIdsForParent = leafNodeIdSet.intersect(effectiveCompletedBatchIds).toList
