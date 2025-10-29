@@ -31,6 +31,7 @@ class CollectionCertPreProcessFnTestSpec extends BaseTestSpec {
     var jedis: Jedis = _
     var cache: DataCache = _
     var contentCache: DataCache = _
+    var levelCache: DataCache = _
     var redisServer: RedisServer = _
     redisServer = new RedisServer(6340)
     redisServer.start()
@@ -48,6 +49,8 @@ class CollectionCertPreProcessFnTestSpec extends BaseTestSpec {
         cache.init()
         contentCache = new DataCache(jobConfig, redisConnect, jobConfig.contentCacheStore, List())
         contentCache.init()
+        levelCache = new DataCache(jobConfig, redisConnect, jobConfig.levelCacheStore, List())
+        levelCache.init()
         jedis.flushDB()
 
     }
@@ -69,7 +72,7 @@ class CollectionCertPreProcessFnTestSpec extends BaseTestSpec {
         when(mockHttpUtil.get(ArgumentMatchers.contains(jobConfig.contentReadApi), ArgumentMatchers.any[Map[String, String]]())).thenReturn(HTTPResponse(200, EventFixture.CONTENT_1))
         jedis.select(jobConfig.contentCacheStore)
         jedis.set("content_001", """{"identifier":"content_001","contentType": "selfAssess"}""")
-        val certEvent = new CollectionCertPreProcessorFn(jobConfig, mockHttpUtil)(stringTypeInfo, cassandraUtil).issueCertificate(event, template)(cassandraUtil, cache, contentCache, mockMetrics, jobConfig, mockHttpUtil)
+        val certEvent = new CollectionCertPreProcessorFn(jobConfig, mockHttpUtil)(stringTypeInfo, cassandraUtil).issueCertificate(event, template)(cassandraUtil, cache, contentCache, levelCache, mockMetrics, jobConfig, mockHttpUtil)
         certEvent shouldNot be(null)        
     }
 
@@ -81,7 +84,7 @@ class CollectionCertPreProcessFnTestSpec extends BaseTestSpec {
         when(mockHttpUtil.get(ArgumentMatchers.contains(jobConfig.contentReadApi), ArgumentMatchers.any[Map[String, String]]())).thenReturn(HTTPResponse(200, EventFixture.CONTENT_1))
         jedis.select(jobConfig.contentCacheStore)
         jedis.set("content_001", """{"identifier":"content_001","contentType": "selfAssess"}""")
-        val certEvent: String = new CollectionCertPreProcessorFn(jobConfig, mockHttpUtil)(stringTypeInfo, cassandraUtil).issueCertificate(event, template)(cassandraUtil, cache, contentCache, mockMetrics, jobConfig, mockHttpUtil)
+        val certEvent: String = new CollectionCertPreProcessorFn(jobConfig, mockHttpUtil)(stringTypeInfo, cassandraUtil).issueCertificate(event, template)(cassandraUtil, cache, contentCache, levelCache, mockMetrics, jobConfig, mockHttpUtil)
         certEvent shouldNot be(null)
         getRecipientName(certEvent) should be("Rajesh")
     }
@@ -94,7 +97,7 @@ class CollectionCertPreProcessFnTestSpec extends BaseTestSpec {
         when(mockHttpUtil.get(ArgumentMatchers.contains(jobConfig.contentReadApi), ArgumentMatchers.any[Map[String, String]]())).thenReturn(HTTPResponse(200, EventFixture.CONTENT_1))
         jedis.select(jobConfig.contentCacheStore)
         jedis.set("content_001", """{"identifier":"content_001","contentType": "selfAssess"}""")
-        val certEvent: String = new CollectionCertPreProcessorFn(jobConfig, mockHttpUtil)(stringTypeInfo, cassandraUtil).issueCertificate(event, template)(cassandraUtil, cache, contentCache, mockMetrics, jobConfig, mockHttpUtil)
+        val certEvent: String = new CollectionCertPreProcessorFn(jobConfig, mockHttpUtil)(stringTypeInfo, cassandraUtil).issueCertificate(event, template)(cassandraUtil, cache, contentCache, levelCache, mockMetrics, jobConfig, mockHttpUtil)
         certEvent shouldNot be(null)
         getRecipientName(certEvent) should be("Suresh")
     }
@@ -107,7 +110,7 @@ class CollectionCertPreProcessFnTestSpec extends BaseTestSpec {
         when(mockHttpUtil.get(ArgumentMatchers.contains(jobConfig.contentReadApi), ArgumentMatchers.any[Map[String, String]]())).thenReturn(HTTPResponse(200, EventFixture.CONTENT_1))
         jedis.select(jobConfig.contentCacheStore)
         jedis.set("content_001", """{"identifier":"content_001","contentType": "selfAssess"}""")
-        val certEvent: String = new CollectionCertPreProcessorFn(jobConfig, mockHttpUtil)(stringTypeInfo, cassandraUtil).issueCertificate(event, template)(cassandraUtil, cache, contentCache, mockMetrics, jobConfig, mockHttpUtil)
+        val certEvent: String = new CollectionCertPreProcessorFn(jobConfig, mockHttpUtil)(stringTypeInfo, cassandraUtil).issueCertificate(event, template)(cassandraUtil, cache, contentCache, levelCache, mockMetrics, jobConfig, mockHttpUtil)
         certEvent shouldNot be(null)
         getRecipientName(certEvent) should be("Manju")
     }
