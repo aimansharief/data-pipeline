@@ -17,7 +17,7 @@ trait IssueCertificateHelper {
     private[this] val logger = LoggerFactory.getLogger(classOf[CollectionCertPreProcessorFn])
 
 
-    def issueCertificate(event:Event, template: Map[String, String])(cassandraUtil: CassandraUtil, cache:DataCache, contentCache: DataCache, metrics: Metrics, config: CollectionCertPreProcessorConfig, httpUtil: HttpUtil): String = {
+    def issueCertificate(event:Event, template: Map[String, String])(cassandraUtil: CassandraUtil, cache:DataCache, contentCache: DataCache, levelCache: DataCache, metrics: Metrics, config: CollectionCertPreProcessorConfig, httpUtil: HttpUtil): String = {
         //validCriteria
         logger.info("IssueCertificateHelper:: issueCertificate:: event:: "+event)
         val criteria = validateTemplate(template, event.batchId)(config)
@@ -29,7 +29,7 @@ trait IssueCertificateHelper {
         logger.info("IssueCertificateHelper:: issueCertificate:: enrolledUser:: "+enrolledUser)
 
         //validateAssessmentCriteria
-        val assessedUser = validateAssessmentCriteria(event, criteria.getOrElse(config.assessment, Map[String, AnyRef]()).asInstanceOf[Map[String, AnyRef]], enrolledUser.userId, additionalProps)(metrics, cassandraUtil, contentCache, config)
+        val assessedUser = validateAssessmentCriteria(event, criteria.getOrElse(config.assessment, Map[String, AnyRef]()).asInstanceOf[Map[String, AnyRef]], enrolledUser.userId, additionalProps)(metrics, cassandraUtil, contentCache, levelCache, config, httpUtil)
         logger.info("IssueCertificateHelper:: issueCertificate:: assessedUser:: "+assessedUser)
 
         //validateUserCriteria
@@ -56,9 +56,35 @@ trait IssueCertificateHelper {
 
     def validateEnrolmentCriteria(event: Event, enrollmentCriteria: Map[String, AnyRef], certName: String, additionalProps: Map[String, List[String]])(metrics:Metrics, cassandraUtil: CassandraUtil, config:CollectionCertPreProcessorConfig): EnrolledUser = {
         if(enrollmentCriteria.nonEmpty) {
-            val query = QueryBuilder.select().from(config.keyspace, config.userEnrolmentsTable)
-              .where(QueryBuilder.eq(config.dbUserId, event.userId)).and(QueryBuilder.eq(config.dbCourseId, event.courseId))
-              .and(QueryBuilder.eq(config.dbBatchId, event.batchId))
+            val query = if (event.isActivityBasedEvent) {
+                // First, get the activity type from batches table
+                val activityTypeQuery = QueryBuilder.select("activitytype").from(config.collectionTrackingKeyspace, config.collectionBatchesTable)
+                  .where(QueryBuilder.eq(config.dbActivityId, event.activityId))
+                logger.info("IssueCertificateHelper:: validateEnrolmentCriteria:: activityTypeQuery:: " + activityTypeQuery.toString)
+                val activityTypeRow = cassandraUtil.findOne(activityTypeQuery.toString)
+                metrics.incCounter(config.dbReadCount)
+                
+                if (activityTypeRow != null) {
+                    val activityType = activityTypeRow.getString("activitytype")
+                    logger.info("IssueCertificateHelper:: validateEnrolmentCriteria:: activityType:: " + activityType)
+                    
+                    // Now use the activity type in the enrollment query
+                    QueryBuilder.select().from(config.collectionTrackingKeyspace, config.collectionUserEnrolmentsTable)
+                      .where(QueryBuilder.eq(config.dbUserId, event.userId))
+                      .and(QueryBuilder.eq(config.dbActivityId, event.activityId))
+                      .and(QueryBuilder.eq(config.dbActivityType, activityType))
+                      .and(QueryBuilder.eq(config.dbBatchId, event.batchId))
+                } else {
+                    logger.error("IssueCertificateHelper:: validateEnrolmentCriteria:: activityType not found for activityId: " + event.activityId)
+                    // Return a query that will find no results
+                    QueryBuilder.select().from(config.collectionTrackingKeyspace, config.collectionUserEnrolmentsTable)
+                      .where(QueryBuilder.eq(config.dbUserId, "invalid"))
+                }
+            } else {
+                QueryBuilder.select().from(config.keyspace, config.userEnrolmentsTable)
+                  .where(QueryBuilder.eq(config.dbUserId, event.userId)).and(QueryBuilder.eq(config.dbCourseId, event.courseId))
+                  .and(QueryBuilder.eq(config.dbBatchId, event.batchId))
+            }
             logger.info("IssueCertificateHelper:: validateEnrolmentCriteria:: query:: " + query.toString)
             val row = cassandraUtil.findOne(query.toString)
             metrics.incCounter(config.dbReadCount)
@@ -84,10 +110,14 @@ trait IssueCertificateHelper {
         } else EnrolledUser(event.userId, "")
     }
 
-    def validateAssessmentCriteria(event: Event, assessmentCriteria: Map[String, AnyRef], enrolledUser: String, additionalProps: Map[String, List[String]])(metrics:Metrics, cassandraUtil: CassandraUtil, contentCache: DataCache, config:CollectionCertPreProcessorConfig):AssessedUser = {
+    def validateAssessmentCriteria(event: Event, assessmentCriteria: Map[String, AnyRef], enrolledUser: String, additionalProps: Map[String, List[String]])(metrics:Metrics, cassandraUtil: CassandraUtil, contentCache: DataCache, levelCache: DataCache, config:CollectionCertPreProcessorConfig, httpUtil: HttpUtil):AssessedUser = {
         logger.info("IssueCertificateHelper:: validateAssessmentCriteria:: assessmentCriteria:: " + assessmentCriteria + " || enrolledUser:: " + enrolledUser)
         if(assessmentCriteria.nonEmpty && enrolledUser.nonEmpty) {
-            val filteredUserAssessments = getMaxScore(event)(metrics, cassandraUtil, config, contentCache)
+            val filteredUserAssessments = if (event.isActivityBasedEvent) {
+                getActivityMaxScore(event)(metrics, cassandraUtil, config, contentCache, levelCache, httpUtil)
+            } else {
+                getMaxScore(event)(metrics, cassandraUtil, config, contentCache)
+            }
             val scoreMap = filteredUserAssessments.map(sc => sc._1 -> (sc._2.head.score * 100 / sc._2.head.totalScore))
             val score:Double = if (scoreMap.nonEmpty) scoreMap.values.max else 0d
 
@@ -155,6 +185,113 @@ trait IssueCertificateHelper {
         } else Map()
     }
 
+    def getActivityMaxScore(event: Event)(metrics:Metrics, cassandraUtil: CassandraUtil, config:CollectionCertPreProcessorConfig, contentCache: DataCache, levelCache: DataCache, httpUtil: HttpUtil):Map[String, Set[AssessmentUserAttempt]] = {
+        val contextId = "cb:" + event.batchId
+        // Extract competency framework batch ID from competency level batch ID (format: frameworkBatchId:levelId)
+        val frameworkBatchId = if (event.batchId.contains(":")) event.batchId.split(":")(0) else event.batchId
+        logger.info("IssueCertificateHelper:: getActivityMaxScore:: frameworkBatchId:: " + frameworkBatchId)
+        
+        // Use Elasticsearch to get framework activityId from activity-batch index
+        val esQuery = s"""{"_source": ["activityId", "activityType"], "query": {"term": {"batchId.raw": "$frameworkBatchId"}}}"""
+        val esUrl = s"${config.esBasePath}/${config.activityBatchIndex}/_search"
+        logger.info("IssueCertificateHelper:: getActivityMaxScore:: esQuery:: " + esQuery)
+        
+        val courseIdForActivity = try {
+            val esResponse = httpUtil.post(esUrl, esQuery)
+            logger.info("IssueCertificateHelper:: getActivityMaxScore:: esResponse:: " + esResponse.status + " :: " + esResponse.body)
+            
+            if (esResponse.status == 200) {
+                val responseData = ScalaJsonUtil.deserialize[Map[String, AnyRef]](esResponse.body)
+                val hits = responseData.getOrElse("hits", Map()).asInstanceOf[Map[String, AnyRef]]
+                val hitsList = hits.getOrElse("hits", List()).asInstanceOf[List[Map[String, AnyRef]]]
+                
+                if (hitsList.nonEmpty) {
+                    val source = hitsList.head.getOrElse("_source", Map()).asInstanceOf[Map[String, AnyRef]]
+                    val frameworkActivityId = source.getOrElse("activityId", "").asInstanceOf[String]
+                    logger.info("IssueCertificateHelper:: getActivityMaxScore:: frameworkActivityId:: " + frameworkActivityId)
+                    
+                    // Get levelExamId from Redis using constructed key: cf:{frameworkActivityId}:cl:{levelActivityId}
+                    val redisKey = s"cf:$frameworkActivityId:cl:${event.activityId}"
+                    logger.info("IssueCertificateHelper:: getActivityMaxScore:: redisKey:: " + redisKey)
+                    
+                    val levelData = levelCache.getWithRetry(redisKey)
+                    if (levelData.nonEmpty) {
+                        val levelExamId = levelData.getOrElse("levelexamid", "").asInstanceOf[String]
+                        logger.info("IssueCertificateHelper:: getActivityMaxScore:: levelExamId:: " + levelExamId)
+                        levelExamId
+                    } else {
+                        logger.error("IssueCertificateHelper:: getActivityMaxScore:: No level data found for key: " + redisKey)
+                        ""
+                    }
+                } else {
+                    logger.error("IssueCertificateHelper:: getActivityMaxScore:: No framework found for batchId: " + frameworkBatchId)
+                    ""
+                }
+            } else {
+                logger.error("IssueCertificateHelper:: getActivityMaxScore:: Elasticsearch error: " + esResponse.status + " :: " + esResponse.body)
+                ""
+            }
+        } catch {
+            case ex: Exception =>
+                logger.error("IssueCertificateHelper:: getActivityMaxScore:: Exception while calling Elasticsearch: " + ex.getMessage)
+                ""
+        }
+        if (courseIdForActivity.nonEmpty) {
+            // Construct the correct batch_id as frameworkBatchId:levelExamId
+            val assessmentBatchId = s"$frameworkBatchId:$courseIdForActivity"
+            logger.info("IssueCertificateHelper:: getActivityMaxScore:: assessmentBatchId:: " + assessmentBatchId)
+            
+            val query = QueryBuilder.select().column("content_id").column("total_score").column("total_max_score")
+              .from(config.keyspace, config.assessmentTable)
+              .where(QueryBuilder.eq("course_id", courseIdForActivity))
+              .and(QueryBuilder.eq("batch_id", assessmentBatchId))
+              .and(QueryBuilder.eq("user_id", event.userId))
+
+            logger.info("IssueCertificateHelper:: getActivityMaxScore:: assessmentQuery:: " + query.toString)
+            val rows: java.util.List[Row] = cassandraUtil.find(query.toString)
+            metrics.incCounter(config.dbReadCount)
+            
+            if(null != rows && !rows.isEmpty) {
+                // Group by content_id and get the best attempt for each content
+                val assessmentsByContent = rows.asScala.toList.groupBy(_.getString("content_id"))
+                
+                val userAssessments = assessmentsByContent.map { case (contentId, attempts) =>
+                    // Find the attempt with highest score percentage for this content
+                    val bestAttempt = attempts.maxBy { row =>
+                        val totalScore = row.getDouble("total_score")
+                        val totalMaxScore = row.getDouble("total_max_score")
+                        if (totalMaxScore > 0) totalScore / totalMaxScore else 0.0
+                    }
+                    
+                    val score = bestAttempt.getDouble("total_score")
+                    val maxScore = bestAttempt.getDouble("total_max_score")
+                    
+                    contentId -> Set(AssessmentUserAttempt(contentId, score, maxScore))
+                }.toMap
+
+                val filteredUserAssessments = userAssessments.filterKeys(key => {
+                    val metadata = contentCache.getWithRetry(key)
+                    if (metadata.nonEmpty) {
+                        val contentType = metadata.getOrElse("contenttype", "")
+                        config.assessmentContentTypes.contains(contentType)
+                    } else if(metadata.isEmpty && config.enableSuppressException){
+                        logger.error("Suppressed exception: Metadata cache not available for: " + key)
+                        false
+                    } else throw new Exception("Metadata cache not available for: " + key)
+                })
+                
+                logger.info("IssueCertificateHelper:: getActivityMaxScore:: filteredUserAssessments:: " + filteredUserAssessments.size + " assessments found")
+                if (filteredUserAssessments.nonEmpty) filteredUserAssessments else Map()
+            } else {
+                logger.info("IssueCertificateHelper:: getActivityMaxScore:: No assessment data found for levelExamId: " + courseIdForActivity)
+                Map()
+            }
+        } else {
+            logger.error("IssueCertificateHelper:: getActivityMaxScore:: Unable to get levelExamId for activity: " + event.activityId)
+            Map()
+        }
+    }
+
     def isValidAssessCriteria(assessmentCriteria: Map[String, AnyRef], score: Double): Boolean = {
         if(assessmentCriteria.get("score").isInstanceOf[Number]) {
             score == assessmentCriteria.get("score").asInstanceOf[Int].toDouble
@@ -207,6 +344,64 @@ trait IssueCertificateHelper {
         }
     }
 
+    def getActivityName(activityId: String)(metrics:Metrics, config:CollectionCertPreProcessorConfig, cache:DataCache, httpUtil: HttpUtil): String = {
+        val activityMetadata = cache.getWithRetry(activityId)
+        if(null == activityMetadata || activityMetadata.isEmpty) {
+            val url = config.contentBasePath + config.contentReadApi + "/" + activityId + "?fields=name"
+            val response = getAPICall(url, "content")(config, httpUtil, metrics)
+            StringContext.processEscapes(response.getOrElse(config.name, "").asInstanceOf[String]).filter(_ >= ' ')
+        } else {
+            StringContext.processEscapes(activityMetadata.getOrElse(config.name, "").asInstanceOf[String]).filter(_ >= ' ')
+        }
+    }
+
+    def getActivityNameFromBatch(batchId: String)(metrics:Metrics, config:CollectionCertPreProcessorConfig, httpUtil: HttpUtil): String = {
+        // Use the full batch ID to search in Elasticsearch activity-batch index
+        val esQuery = s"""{"_source": ["activityId", "activityType", "name"], "query": {"term": {"batchId.raw": "$batchId"}}}"""
+        val esUrl = s"${config.esBasePath}/${config.activityBatchIndex}/_search"
+        logger.info("IssueCertificateHelper:: getActivityNameFromBatch:: esQuery:: " + esQuery)
+        
+        try {
+            val esResponse = httpUtil.post(esUrl, esQuery)
+            logger.info("IssueCertificateHelper:: getActivityNameFromBatch:: esResponse:: " + esResponse.status + " :: " + esResponse.body)
+            
+            if (esResponse.status == 200) {
+                val responseData = ScalaJsonUtil.deserialize[Map[String, AnyRef]](esResponse.body)
+                val hits = responseData.getOrElse("hits", Map()).asInstanceOf[Map[String, AnyRef]]
+                val hitsList = hits.getOrElse("hits", List()).asInstanceOf[List[Map[String, AnyRef]]]
+                
+                if (hitsList.nonEmpty) {
+                    val source = hitsList.head.getOrElse("_source", Map()).asInstanceOf[Map[String, AnyRef]]
+                    val activityName = source.getOrElse("name", "").asInstanceOf[String]
+                    val activityType = source.getOrElse("activityType", "").asInstanceOf[String]
+                    
+                    logger.info("IssueCertificateHelper:: getActivityNameFromBatch:: activityName:: " + activityName + " || activityType:: " + activityType)
+                    
+                    if (activityName.nonEmpty) {
+                        StringContext.processEscapes(activityName).filter(_ >= ' ')
+                    } else {
+                        // Fallback to activity type based name
+                        activityType match {
+                            case "Competency Framework" => "Competency Framework Certificate"
+                            case "Competency Level" => "Competency Level Certificate"
+                            case _ => "Activity Certificate"
+                        }
+                    }
+                } else {
+                    logger.error("IssueCertificateHelper:: getActivityNameFromBatch:: No activity found for batchId: " + batchId)
+                    "Activity Certificate"
+                }
+            } else {
+                logger.error("IssueCertificateHelper:: getActivityNameFromBatch:: Elasticsearch error: " + esResponse.status + " :: " + esResponse.body)
+                "Activity Certificate"
+            }
+        } catch {
+            case ex: Exception =>
+                logger.error("IssueCertificateHelper:: getActivityNameFromBatch:: Exception while calling Elasticsearch: " + ex.getMessage)
+                "Activity Certificate"
+        }
+    }
+
     def generateCertificateEvent(event: Event, template: Map[String, String], userDetails: Map[String, AnyRef], enrolledUser: EnrolledUser, assessedUser: AssessedUser, additionalProps: Map[String, List[String]], certName: String)(metrics:Metrics, config:CollectionCertPreProcessorConfig, cache:DataCache, httpUtil: HttpUtil): String = {
         val firstName = Option(userDetails.getOrElse("firstName", "").asInstanceOf[String]).getOrElse("")
         val lastName = Option(userDetails.getOrElse("lastName", "").asInstanceOf[String]).getOrElse("")
@@ -216,10 +411,39 @@ trait IssueCertificateHelper {
         }
 
         val recipientName = nullStringCheck(firstName).concat(" ").concat(nullStringCheck(lastName)).trim
-        val courseName = getCourseName(event.courseId)(metrics, config, cache, httpUtil)
+        
+        // Get activity type for activity-based events
+        val activityType = if (event.isActivityBasedEvent) {
+            // Extract activityType from Elasticsearch response
+            val esQuery = s"""{"_source": ["activityType"], "query": {"term": {"batchId.raw": "${event.batchId}"}}}"""
+            val esUrl = s"${config.esBasePath}/${config.activityBatchIndex}/_search"
+            try {
+                val esResponse = httpUtil.post(esUrl, esQuery)
+                if (esResponse.status == 200) {
+                    val responseData = ScalaJsonUtil.deserialize[Map[String, AnyRef]](esResponse.body)
+                    val hits = responseData.getOrElse("hits", Map()).asInstanceOf[Map[String, AnyRef]]
+                    val hitsList = hits.getOrElse("hits", List()).asInstanceOf[List[Map[String, AnyRef]]]
+                    if (hitsList.nonEmpty) {
+                        val source = hitsList.head.getOrElse("_source", Map()).asInstanceOf[Map[String, AnyRef]]
+                        source.getOrElse("activityType", "").asInstanceOf[String]
+                    } else ""
+                } else ""
+            } catch {
+                case _: Exception => ""
+            }
+        } else ""
+        
+        val contentName = if (event.isActivityBasedEvent) {
+            getActivityNameFromBatch(event.batchId)(metrics, config, httpUtil)
+        } else {
+            getCourseName(event.courseId)(metrics, config, cache, httpUtil)
+        }
         val dateFormatter = new SimpleDateFormat("yyyy-MM-dd")
-        val related = getRelatedData(event, enrolledUser, assessedUser, userDetails, additionalProps, certName, courseName)(config)
-        val eData = Map[String, AnyRef] (
+        val related = getRelatedData(event, enrolledUser, assessedUser, userDetails, additionalProps, certName, contentName)(config)
+        // Create dynamic content name field based on event type
+        val contentNameField = if (event.isActivityBasedEvent) "activityName" else "courseName"
+        
+        val baseEData = Map[String, AnyRef] (
             "issuedDate" -> dateFormatter.format(enrolledUser.issuedOn),
             "data" -> List(Map[String, AnyRef]("recipientName" -> recipientName, "recipientId" -> event.userId)),
             "criteria" -> Map[String, String]("narrative" -> certName),
@@ -230,12 +454,18 @@ trait IssueCertificateHelper {
             "orgId" -> userDetails.getOrElse("rootOrgId", ""),
             "issuer" -> ScalaJsonUtil.deserialize[Map[String, AnyRef]](template.getOrElse(config.issuer, "{}")),
             "signatoryList" -> ScalaJsonUtil.deserialize[List[Map[String, AnyRef]]](template.getOrElse(config.signatoryList, "[]")),
-            "courseName" -> courseName,
+            contentNameField -> contentName,
             "basePath" -> config.certBasePath,
             "related" ->  related,
             "name" -> certName,
             "tag" -> event.batchId
         )
+        
+        val eData = if (event.isActivityBasedEvent && activityType.nonEmpty) {
+            baseEData + ("activityType" -> activityType)
+        } else {
+            baseEData
+        }
 
         logger.info("IssueCertificateHelper:: generateCertificateEvent:: eData:: " + eData)
         ScalaJsonUtil.serialize(BEJobRequestEvent(edata = eData, `object` = EventObject(id = event.userId)))
@@ -249,11 +479,24 @@ trait IssueCertificateHelper {
     }
 
     def getRelatedData(event: Event, enrolledUser: EnrolledUser, assessedUser: AssessedUser,
-                       userDetails: Map[String, AnyRef], additionalProps: Map[String, List[String]], certName: String, courseName: String)(config: CollectionCertPreProcessorConfig): Map[String, Any] = {
+                       userDetails: Map[String, AnyRef], additionalProps: Map[String, List[String]], certName: String, contentName: String)(config: CollectionCertPreProcessorConfig): Map[String, Any] = {
         val userAdditionalProps = additionalProps.getOrElse(config.user, List()).filter(prop => userDetails.contains(prop)).map(prop => prop -> userDetails.getOrElse(prop, null)).toMap
         val locationProps = getLocationDetails(userDetails, additionalProps)
-        val courseAdditionalProps: Map[String, Any] = if(additionalProps.getOrElse("course", List()).nonEmpty) Map("course" -> Map("name" -> courseName)) else Map()
-        Map[String, Any]("batchId" -> event.batchId, "courseId" -> event.courseId, "type" -> certName) ++
-          locationProps ++ enrolledUser.additionalProps ++ assessedUser.additionalProps ++ userAdditionalProps ++ courseAdditionalProps
+        val contentAdditionalProps: Map[String, Any] = if(additionalProps.getOrElse("course", List()).nonEmpty || additionalProps.getOrElse("activity", List()).nonEmpty) {
+            if (event.isActivityBasedEvent) {
+                Map("activity" -> Map("name" -> contentName))
+            } else {
+                Map("course" -> Map("name" -> contentName))
+            }
+        } else Map()
+        
+        val baseRelatedData = Map[String, Any]("batchId" -> event.batchId, "type" -> certName)
+        val contentIdData = if (event.isActivityBasedEvent) {
+            Map[String, Any]("activityId" -> event.activityId)
+        } else {
+            Map[String, Any]("courseId" -> event.courseId)
+        }
+        
+        baseRelatedData ++ contentIdData ++ locationProps ++ enrolledUser.additionalProps ++ assessedUser.additionalProps ++ userAdditionalProps ++ contentAdditionalProps
     }
 }

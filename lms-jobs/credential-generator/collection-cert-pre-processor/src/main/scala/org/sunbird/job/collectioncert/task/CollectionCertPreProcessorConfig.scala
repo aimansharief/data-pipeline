@@ -15,6 +15,7 @@ class CollectionCertPreProcessorConfig(override val config: Config) extends Base
     //Redis config
     val collectionCacheStore: Int = config.getInt("redis.database.collectionCache.id")
     val contentCacheStore: Int = config.getInt("redis.database.contentCache.id")
+    val levelCacheStore: Int = 6 // Redis database index for level exam mappings
     val metaRedisHost: String = config.getString("redis-meta.host")
     val metaRedisPort: Int = config.getInt("redis-meta.port")
 
@@ -39,15 +40,27 @@ class CollectionCertPreProcessorConfig(override val config: Config) extends Base
     val userEnrolmentsTable: String = config.getString("lms-cassandra.user_enrolments.table")
     val assessmentTable: String = config.getString("lms-cassandra.assessment_aggregator.table")
     val userActivityAggTable: String = config.getString("lms-cassandra.user_activity_agg.table")
+    
+    // Collection tracking cassandra config
+    val collectionTrackingKeyspace: String = config.getString("collection-tracking-cassandra.keyspace")
+    val collectionBatchesTable: String = config.getString("collection-tracking-cassandra.batches.table")
+    val collectionUserEnrolmentsTable: String = config.getString("collection-tracking-cassandra.user_enrolments.table")
+    
     val dbBatchId = "batchid"
     val dbCourseId = "courseid"
     val dbUserId = "userid"
+    val dbActivityId = "activityid"
+    val dbActivityType = "activitytype"
     
     //API URL
     val contentBasePath = config.getString("service.content.basePath")
     val learnerBasePath = config.getString("service.learner.basePath")
     val userReadApi = config.getString("user_read_api")
     val contentReadApi = config.getString("content_read_api")
+    
+    //Elasticsearch config
+    val esBasePath = config.getString("service.search.basePath")
+    val activityBatchIndex = config.getString("activity_batch_index")
 
     // Metric List
     val totalEventsCount = "total-events-count"
