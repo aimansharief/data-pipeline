@@ -54,5 +54,11 @@ object CollectionCertPreProcessorTask {
 // $COVERAGE-ON
 
 class CollectionCertPreProcessorKeySelector extends KeySelector[Event, String] {
-    override def getKey(event: Event): String = Set(event.userId, event.courseId, event.batchId).mkString("_")
+    override def getKey(event: Event): String = {
+        if (event.isActivityBasedEvent) {
+            Set(event.userId, event.activityId, event.batchId).mkString("_")
+        } else {
+            Set(event.userId, event.courseId, event.batchId).mkString("_")
+        }
+    }
 }
