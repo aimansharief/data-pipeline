@@ -11,6 +11,8 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
 
     def courseId: String = readOrDefault[String]("edata.courseId", "")
 
+    def activityId: String = readOrDefault[String]("edata.activityId", "")
+
     def userId: String = {
         val list = readOrDefault[List[String]]("edata.userIds", List[String]())
         if(list.isEmpty) "" else list.head
@@ -20,10 +22,13 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
 
     def eData: Map[String, AnyRef] = readOrDefault[Map[String, AnyRef]]("edata", Map[String, AnyRef]())
 
+    def isActivityBasedEvent: Boolean = !activityId.isEmpty
+
+    def isCourseBasedEvent: Boolean = !courseId.isEmpty
 
     def isValid()(config: CollectionCertPreProcessorConfig): Boolean = {
-        config.issueCertificate.equalsIgnoreCase(action) && !batchId.isEmpty && !courseId.isEmpty &&
-          !userId.isEmpty
+        config.issueCertificate.equalsIgnoreCase(action) && !batchId.isEmpty && 
+          (isCourseBasedEvent || isActivityBasedEvent) && !userId.isEmpty
     }
 
 }
