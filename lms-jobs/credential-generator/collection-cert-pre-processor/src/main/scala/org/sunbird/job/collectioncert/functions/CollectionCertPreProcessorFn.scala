@@ -24,6 +24,7 @@ class CollectionCertPreProcessorFn(config: CollectionCertPreProcessorConfig, htt
     private[this] val logger = LoggerFactory.getLogger(classOf[CollectionCertPreProcessorFn])
     private var cache: DataCache = _
     private var contentCache: DataCache = _
+    private var levelCache: DataCache = _
 
     override def open(parameters: Configuration): Unit = {
         super.open(parameters)
@@ -35,11 +36,17 @@ class CollectionCertPreProcessorFn(config: CollectionCertPreProcessorConfig, htt
       val metaRedisConn = new RedisConnect(config, Option(config.metaRedisHost), Option(config.metaRedisPort))
       contentCache = new DataCache(config, metaRedisConn, config.contentCacheStore, List())
       contentCache.init()
+      
+      // Initialize level cache for database index 6
+      levelCache = new DataCache(config, metaRedisConn, config.levelCacheStore, List())
+      levelCache.init()
     }
 
     override def close(): Unit = {
         cassandraUtil.close()
         cache.close()
+        contentCache.close()
+        levelCache.close()
         super.close()
     }
 
@@ -54,18 +61,24 @@ class CollectionCertPreProcessorFn(config: CollectionCertPreProcessorConfig, htt
         try {
             metrics.incCounter(config.totalEventsCount)
             if(event.isValid()(config)) {
-                val certTemplates = fetchTemplates(event)(metrics).filter(template => template._2.getOrElse("url", "").asInstanceOf[String].contains(".svg"))
+                val certTemplates = if (event.isActivityBasedEvent) {
+                    fetchActivityTemplates(event)(metrics).filter(template => template._2.getOrElse("url", "").asInstanceOf[String].contains(".svg"))
+                } else {
+                    fetchTemplates(event)(metrics).filter(template => template._2.getOrElse("url", "").asInstanceOf[String].contains(".svg"))
+                }
                 logger.info("CollectionCertPreProcessor:: processElement:: certTemplates:: " + certTemplates)
                 if(!certTemplates.isEmpty) {
                     certTemplates.map(template => {
-                        val certEvent = issueCertificate(event, template._2)(cassandraUtil, cache, contentCache, metrics, config, httpUtil)
+                        val certEvent = issueCertificate(event, template._2)(cassandraUtil, cache, contentCache, levelCache, metrics, config, httpUtil)
                         Option(certEvent).map(e => {
                             context.output(config.generateCertificateOutputTag, certEvent)
                             metrics.incCounter(config.successEventCount)}
                         ).getOrElse({metrics.incCounter(config.skippedEventCount)})
                     })
                 } else {
-                    logger.info(s"No certTemplates available for batchId :${event.batchId}")
+                    val idType = if (event.isActivityBasedEvent) "activityId" else "courseId"
+                    val idValue = if (event.isActivityBasedEvent) event.activityId else event.courseId
+                    logger.info(s"No certTemplates available for batchId: ${event.batchId}, $idType: $idValue")
                     metrics.incCounter(config.skippedEventCount)
                 }
             } else {
@@ -85,6 +98,19 @@ class CollectionCertPreProcessorFn(config: CollectionCertPreProcessorConfig, htt
     def fetchTemplates(event: Event)(implicit metrics: Metrics): Map[String, Map[String, String]] = {
         val query = QueryBuilder.select(config.certTemplates).from(config.keyspace, config.courseTable)
           .where(QueryBuilder.eq(config.dbCourseId, event.courseId)).and(QueryBuilder.eq(config.dbBatchId, event.batchId))
+        
+        val row: Row = cassandraUtil.findOne(query.toString)
+        if(null != row && !row.isNull(config.certTemplates)) {
+            val templates = row.getMap(config.certTemplates, TypeToken.of(classOf[String]), TypeTokens.mapOf(classOf[String], classOf[String]))
+            templates.asScala.map(template => (template._1 -> template._2.asScala.toMap)).toMap
+        }else {
+            Map[String, Map[String, String]]()
+        }
+    }
+
+    def fetchActivityTemplates(event: Event)(implicit metrics: Metrics): Map[String, Map[String, String]] = {
+        val query = QueryBuilder.select(config.certTemplates).from(config.collectionTrackingKeyspace, config.collectionBatchesTable)
+          .where(QueryBuilder.eq(config.dbActivityId, event.activityId)).and(QueryBuilder.eq(config.dbBatchId, event.batchId))
         
         val row: Row = cassandraUtil.findOne(query.toString)
         if(null != row && !row.isNull(config.certTemplates)) {
