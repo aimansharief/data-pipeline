@@ -20,6 +20,7 @@ class CertMapper(certConfig: CertificateConfig) {
     val signatoryArr = getSignatoryArray(certReq.signatoryList)
     val issuedDate = new IssuedDateValuator().evaluates(if (StringUtils.isBlank(certReq.issuedDate)) getCurrentDate else certReq.issuedDate)
     val expiryDate: String = if (StringUtils.isNotBlank(certReq.expiryDate)) new ExpiryDateValuator(issuedDate).evaluates(certReq.expiryDate) else ""
+    val displayName = Option(certReq.activityName).filter(StringUtils.isNotBlank).getOrElse(certReq.courseName)
     val certList: List[CertModel] = dataList.toStream.map((data: Map[String, AnyRef]) => {
       val certModel: CertModel = CertModel(recipientName = data.getOrElse(JsonKeys.RECIPIENT_NAME, "").asInstanceOf[String],
         recipientEmail = Option.apply(data.getOrElse(JsonKeys.RECIPIENT_EMAIl, "").asInstanceOf[String]),
@@ -27,7 +28,7 @@ class CertMapper(certConfig: CertificateConfig) {
         identifier = data.getOrElse(JsonKeys.RECIPIENT_ID, "").asInstanceOf[String],
         validFrom = Option.apply(data.getOrElse(JsonKeys.VALID_FROM, null).asInstanceOf[String]),
         issuer = getIssuer(certReq),
-        courseName = certReq.courseName,
+        courseName = displayName,
         issuedDate = issuedDate,
         certificateLogo = Option.apply(certReq.logo),
         certificateDescription = Option.apply(certReq.certificateDescription),

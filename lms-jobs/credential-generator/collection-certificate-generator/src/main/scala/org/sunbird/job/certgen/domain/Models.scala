@@ -57,10 +57,13 @@ case class UserEnrollmentData(batchId: String,
                               courseId: String,
                               courseName: String,
                               templateId: String,
-                              certificate: Certificate) {
+                              certificate: Certificate,
+                              activityId: Option[String] = None,
+                              activityType: Option[String] = None,
+                              activityName: Option[String] = None) {
   def this() = this("", "", "", "", "", null)
 }
 
 case class Recipient(id: String, name: String, `type`: String)
-case class Training(id: String, name: String, `type`: String, batchId: String, group: Option[String] = None, completedOn: String)
+case class Training(id: String, name: String, `type`: String, batchId: String, group: Option[String] = None, completedOn: String, activity: Option[String] = None)
 case class Issuer(url: String, name: String, kid: String)

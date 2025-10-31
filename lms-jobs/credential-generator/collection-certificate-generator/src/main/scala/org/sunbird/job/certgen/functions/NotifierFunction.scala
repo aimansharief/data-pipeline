@@ -22,7 +22,7 @@ import scala.collection.JavaConverters._
 import scala.collection.convert.ImplicitConversions.`map AsJavaMap`
 import scala.collection.mutable
 
-case class NotificationMetaData(userId: String, courseName: String, issuedOn: Date, courseId: String, batchId: String, templateId: String, partition: Int, offset: Long)
+case class NotificationMetaData(userId: String, courseName: String, issuedOn: Date, courseId: String, batchId: String, templateId: String, partition: Int, offset: Long, isActivity: Boolean = false)
 
 class NotifierFunction(config: CertificateGeneratorConfig, httpUtil: HttpUtil, @transient var cassandraUtil: CassandraUtil = null)(implicit val stringTypeInfo: TypeInformation[String])
   extends BaseProcessFunction[NotificationMetaData, String](config) {
@@ -49,59 +49,70 @@ class NotifierFunction(config: CertificateGeneratorConfig, httpUtil: HttpUtil, @
 
     val userResponse: Map[String, AnyRef] = getUserDetails(metaData.userId)(metrics) // call user Service
     if (null != userResponse && userResponse.nonEmpty) {
-      val primaryFields = Map(config.courseId.toLowerCase() -> metaData.courseId,
-        config.batchId.toLowerCase -> metaData.batchId)
-      val row = getNotificationTemplates(primaryFields, metrics)
-      val certTemplate = row.getMap(config.cert_templates, com.google.common.reflect.TypeToken.of(classOf[String]),
-        TypeTokens.mapOf(classOf[String], classOf[String]))
-      val url = config.learnerServiceBaseUrl + config.notificationEndPoint
-      if (certTemplate != null && StringUtils.isNotBlank(metaData.templateId) &&
-        certTemplate.containsKey(metaData.templateId) &&
-        certTemplate.get(metaData.templateId).containsKey(config.notifyTemplate)) {
-        logger.info("notification template is present in the cert-templates object {}",
-          certTemplate.get(metaData.templateId).containsKey(config.notifyTemplate))
-        val notifyTemplate = getNotifyTemplateFromRes(certTemplate.get(metaData.templateId))
-        if ( notifyTemplate != null && notifyTemplate.containsKey(JsonKeys.STATE_IMAGE_URL)) {
-          val placeholderUrl = notifyTemplate.getOrElse(JsonKeys.STATE_IMAGE_URL,"")
-          if(placeholderUrl != null){
-            val replacedUrl = placeholderUrl.replace(config.cloudStoreBasePathPlaceholder, config.baseUrl+"/"+config.contentCloudStorageContainer)
-            notifyTemplate.put(JsonKeys.STATE_IMAGE_URL, replacedUrl)
-          }
-        }
-        val request = mutable.Map[String, AnyRef]("request" -> (notifyTemplate ++ mutable.Map[String, AnyRef](
-          config.firstName -> userResponse.getOrElse(config.firstName, "").asInstanceOf[String],
-          config.trainingName -> metaData.courseName,
-          config.heldDate -> dateFormatter.format(metaData.issuedOn),
-          config.recipientUserIds -> List[String](metaData.userId),
-          config.body -> "email body")))
+      // Select the right source for templates
+      val row = if (!metaData.isActivity) {
+        val primaryFields = Map(config.courseId.toLowerCase() -> metaData.courseId, config.batchId.toLowerCase -> metaData.batchId)
+        getNotificationTemplates(primaryFields, metrics, isActivity = false)
+      } else {
+        val primaryFields = Map(config.dbActivityId -> metaData.courseId, config.batchId.toLowerCase -> metaData.batchId)
+        getNotificationTemplates(primaryFields, metrics, isActivity = true)
+      }
 
-        val response = httpUtil.post(url, ScalaJsonUtil.serialize(request))
-        if (response.status == 200) {
-          metrics.incCounter(config.notifiedUserCount)
-          logger.info("email response status {} :: {}", response.status, response.body)
-        }
-        else {
-          metrics.incCounter(config.failedEventCount)
-          logger.error(s"Error response from email notification for request :: ${request} :: response is :: ${response.status} ::  ${response.body}")
-          throw new InvalidEventException(s"Error in email notification response : ${response}", Map("partition" -> metaData.partition, "offset" -> metaData.offset), null)
-        }
-        if (StringUtils.isNoneBlank(userResponse.getOrElse("maskedPhone", "").asInstanceOf[String])) {
-          request.put(config.body, "sms")
-          val smsBody = config.notificationSmsBody.replaceAll("@@TRAINING_NAME@@", metaData.courseName)
-            .replaceAll("@@HELD_DATE@@", dateFormatter.format(metaData.issuedOn))
-          request.getOrElse("request", mutable.Map[String, AnyRef]()).asInstanceOf[mutable.Map[String, AnyRef]]
-            .put("body", smsBody)
+      if (row != null) {
+        val certTemplate = row.getMap(config.cert_templates, com.google.common.reflect.TypeToken.of(classOf[String]),
+          TypeTokens.mapOf(classOf[String], classOf[String]))
+        val url = config.learnerServiceBaseUrl + config.notificationEndPoint
+        if (certTemplate != null && StringUtils.isNotBlank(metaData.templateId) &&
+          certTemplate.containsKey(metaData.templateId) &&
+          certTemplate.get(metaData.templateId).containsKey(config.notifyTemplate)) {
+          logger.info("notification template is present in the cert-templates object {}",
+            certTemplate.get(metaData.templateId).containsKey(config.notifyTemplate))
+          val notifyTemplate = getNotifyTemplateFromRes(certTemplate.get(metaData.templateId))
+          if ( notifyTemplate != null && notifyTemplate.containsKey(JsonKeys.STATE_IMAGE_URL)) {
+            val placeholderUrl = notifyTemplate.getOrElse(JsonKeys.STATE_IMAGE_URL,"")
+            if(placeholderUrl != null){
+              val replacedUrl = placeholderUrl.replace(config.cloudStoreBasePathPlaceholder, config.baseUrl+"/"+config.contentCloudStorageContainer)
+              notifyTemplate.put(JsonKeys.STATE_IMAGE_URL, replacedUrl)
+            }
+          }
+          val request = mutable.Map[String, AnyRef]("request" -> (notifyTemplate ++ mutable.Map[String, AnyRef](
+            config.firstName -> userResponse.getOrElse(config.firstName, "").asInstanceOf[String],
+            config.trainingName -> metaData.courseName,
+            config.heldDate -> dateFormatter.format(metaData.issuedOn),
+            config.recipientUserIds -> List[String](metaData.userId),
+            config.body -> "email body")))
+
           val response = httpUtil.post(url, ScalaJsonUtil.serialize(request))
-          if (response.status == 200)
-            logger.info("phone response status {} :: {}", response.status, response.body)
+          if (response.status == 200) {
+            metrics.incCounter(config.notifiedUserCount)
+            logger.info("email response status {} :: {}", response.status, response.body)
+          }
           else {
             metrics.incCounter(config.failedEventCount)
-            logger.error(s"Error response from sms notification for request :: ${request} :: response is :: ${response.status} ::  ${response.body}")
-            throw new InvalidEventException(s"Error in sms notification response : ${response}", Map("partition" -> metaData.partition, "offset" -> metaData.offset), null)
+            logger.error(s"Error response from email notification for request :: ${request} :: response is :: ${response.status} ::  ${response.body}")
+            throw new InvalidEventException(s"Error in email notification response : ${response}", Map("partition" -> metaData.partition, "offset" -> metaData.offset), null)
           }
+          if (StringUtils.isNoneBlank(userResponse.getOrElse("maskedPhone", "").asInstanceOf[String])) {
+            request.put(config.body, "sms")
+            val smsBody = config.notificationSmsBody.replaceAll("@@TRAINING_NAME@@", metaData.courseName)
+              .replaceAll("@@HELD_DATE@@", dateFormatter.format(metaData.issuedOn))
+            request.getOrElse("request", mutable.Map[String, AnyRef]()).asInstanceOf[mutable.Map[String, AnyRef]]
+              .put("body", smsBody)
+            val response = httpUtil.post(url, ScalaJsonUtil.serialize(request))
+            if (response.status == 200)
+              logger.info("phone response status {} :: {}", response.status, response.body)
+            else {
+              metrics.incCounter(config.failedEventCount)
+              logger.error(s"Error response from sms notification for request :: ${request} :: response is :: ${response.status} ::  ${response.body}")
+              throw new InvalidEventException(s"Error in sms notification response : ${response}", Map("partition" -> metaData.partition, "offset" -> metaData.offset), null)
+            }
+          }
+        } else {
+          logger.info("notification template is not present in the cert-templates object {}")
+          metrics.incCounter(config.skipNotifyUserCount)
         }
       } else {
-        logger.info("notification template is not present in the cert-templates object {}")
+        logger.info("notification template source row not found")
         metrics.incCounter(config.skipNotifyUserCount)
       }
     }
@@ -117,15 +128,14 @@ class NotifierFunction(config: CertificateGeneratorConfig, httpUtil: HttpUtil, @
 
 
   /**
-    * get notify template  from course-batch table
-    *
-    * @param columns
-    * @param metrics
-    * @return
+    * get notify template  from course-batch table or activity-batches table
     */
-  private def getNotificationTemplates(columns: Map[String, AnyRef], metrics: Metrics): Row = {
+  private def getNotificationTemplates(columns: Map[String, AnyRef], metrics: Metrics, isActivity: Boolean): Row = {
     val selectWhere: Select.Where = QueryBuilder.select().all()
-      .from(config.dbKeyspace, config.dbCourseBatchTable).
+      .from(
+        if (isActivity) config.activityDbKeyspace else config.dbKeyspace,
+        if (isActivity) config.activityBatchesTable else config.dbCourseBatchTable
+      ).
       where()
     columns.map(col => {
       col._2 match {
@@ -135,7 +145,7 @@ class NotifierFunction(config: CertificateGeneratorConfig, httpUtil: HttpUtil, @
           selectWhere.and(QueryBuilder.eq(col._1, col._2))
       }
     })
-    metrics.incCounter(config.courseBatchdbReadCount)
+    if (isActivity) metrics.incCounter(config.courseBatchdbReadCount) else metrics.incCounter(config.courseBatchdbReadCount)
     cassandraUtil.findOne(selectWhere.toString)
   }
 

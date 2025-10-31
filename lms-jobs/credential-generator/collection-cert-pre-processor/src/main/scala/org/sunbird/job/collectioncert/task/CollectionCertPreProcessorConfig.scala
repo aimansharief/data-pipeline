@@ -15,7 +15,7 @@ class CollectionCertPreProcessorConfig(override val config: Config) extends Base
     //Redis config
     val collectionCacheStore: Int = config.getInt("redis.database.collectionCache.id")
     val contentCacheStore: Int = config.getInt("redis.database.contentCache.id")
-    val levelCacheStore: Int = 6 // Redis database index for level exam mappings
+    val levelCacheStore: Int = config.getInt("redis.database.cfCache.id") // Redis database index for level exam mappings
     val metaRedisHost: String = config.getString("redis-meta.host")
     val metaRedisPort: Int = config.getInt("redis-meta.port")
 

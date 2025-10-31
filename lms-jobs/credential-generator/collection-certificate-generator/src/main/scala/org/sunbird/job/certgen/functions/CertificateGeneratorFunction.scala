@@ -68,15 +68,26 @@ class CertificateGeneratorFunction(config: CertificateGeneratorConfig, httpUtil:
     metrics.incCounter(config.totalEventsCount)
     try {
       val certValidator = new CertValidator()
-      logger.info("Certificate generator | is rc integration enabled: " + config.enableRcCertificate)
-      certValidator.validateGenerateCertRequest(event, config.enableSuppressException)
-      if(certValidator.isNotIssued(event)(config, metrics, cassandraUtil)) {
-        if(config.enableRcCertificate) generateCertificateUsingRC(event, context)(metrics)
-        else generateCertificate(event, context)(metrics)
-
+      val notIssued = certValidator.isNotIssued(event)(config, metrics, cassandraUtil)
+      if(notIssued) {
+        if(config.enableRcCertificate) {
+          if (event.isActivity) generateActivityCertificateUsingRC(event, context)(metrics)
+          else generateCourseCertificateUsingRC(event, context)(metrics)
+        } else {
+          if (event.isActivity) generateActivityCertificate(event, context)(metrics)
+          else generateCourseCertificate(event, context)(metrics)
+        }
       } else {
+        val isActivity = event.isActivity
+        val primaryFields = if (!isActivity) {
+          Map(config.userId.toLowerCase() -> event.userId, config.batchId.toLowerCase -> event.batchId, config.courseId.toLowerCase -> event.courseId)
+        } else {
+          Map(config.userId.toLowerCase() -> event.userId,
+            config.batchId.toLowerCase -> event.batchId,
+            config.dbActivityId -> event.activityId,
+            config.dbActivityType -> event.activityType)
+        }
         metrics.incCounter(config.skippedEventCount)
-        logger.info(s"Certificate already issued for: ${event.eData.getOrElse("userId", "")} ${event.related}")
       }
     } catch {
       case e: Exception =>
@@ -86,34 +97,38 @@ class CertificateGeneratorFunction(config: CertificateGeneratorConfig, httpUtil:
   }
 
   @throws[Exception]
-  def generateCertificate(event: Event, context: KeyedProcessFunction[String, Event, String]#Context)(implicit metrics: Metrics): Unit = {
+  def generateCourseCertificate(event: Event, context: KeyedProcessFunction[String, Event, String]#Context)(implicit metrics: Metrics): Unit = {
+    logger.info(s"generateCourseCertificate: Generating certificate for userId=${event.eData.getOrElse("userId", "")}, courseId=${event.related.getOrElse(config.COURSE_ID, "")}, batchId=${event.related.getOrElse(config.BATCH_ID, "")}")
     val certModelList: List[CertModel] = new CertMapper(certificateConfig).mapReqToCertModel(event)
     val certificateGenerator = new CertificateGenerator
     certModelList.foreach(certModel => {
       var uuid: String = null
       try {
+        logger.info(s"generateCourseCertificate: Generating CertModel for userId=${certModel.identifier}, recipientName=${certModel.recipientName}, certificateName=${certModel.certificateName}")
         val certificateExtension: CertificateExtension = certificateGenerator.getCertificateExtension(certModel)
         uuid = certificateGenerator.getUUID(certificateExtension)
+        logger.info(s"generateCourseCertificate: Generated UUID=$uuid for userId=${certModel.identifier}")
         val qrMap = certificateGenerator.generateQrCode(uuid, directory, certificateConfig.basePath)
         val encodedQrCode: String = encodeQrCode(qrMap.qrFile)
         val printUri = SvgGenerator.generate(certificateExtension, encodedQrCode, event.svgTemplate)
         certificateExtension.printUri = Option(printUri)
         val jsonUrl = uploadJson(certificateExtension, directory.concat(uuid).concat(".json"), event.tag.concat("/"))
-        //adding certificate to registry
         val addReq = Map[String, AnyRef](JsonKeys.REQUEST -> {Map[String, AnyRef](
           JsonKeys.ID -> uuid, JsonKeys.JSON_URL -> certificateConfig.basePath.concat(jsonUrl),
           JsonKeys.JSON_DATA -> certificateExtension, JsonKeys.ACCESS_CODE -> qrMap.accessCode,
           JsonKeys.RECIPIENT_NAME -> certModel.recipientName, JsonKeys.RECIPIENT_ID -> certModel.identifier,
           config.RELATED -> event.related
         ) ++ {if (event.oldId.nonEmpty) Map[String, AnyRef](config.OLD_ID -> event.oldId) else Map[String, AnyRef]()}})
+        logger.info(s"generateCourseCertificate: Adding certificate to registry for userId=${certModel.identifier}, uuid=$uuid")
         addCertToRegistry(event, addReq, context)(metrics)
-        //cert-registry end
         val related = event.related
         val userEnrollmentData = UserEnrollmentData(related.getOrElse(config.BATCH_ID, "").asInstanceOf[String], certModel.identifier,
           related.getOrElse(config.COURSE_ID, "").asInstanceOf[String], event.courseName, event.templateId,
           Certificate(uuid, event.name, qrMap.accessCode, formatter.format(new Date()), "", ""))
+        logger.info(s"generateCourseCertificate: Updating user enrollment table for userId=${certModel.identifier}, batchId=${related.getOrElse(config.BATCH_ID, "")}, courseId=${related.getOrElse(config.COURSE_ID, "")}")
         updateUserEnrollmentTable(event, userEnrollmentData, context)
         metrics.incCounter(config.successEventCount)
+        logger.info(s"generateCourseCertificate: Certificate generation completed for userId=${certModel.identifier}, uuid=$uuid")
       } finally {
         cleanUp(uuid, directory)
       }
@@ -121,34 +136,190 @@ class CertificateGeneratorFunction(config: CertificateGeneratorConfig, httpUtil:
   }
 
   @throws[Exception]
-  def generateCertificateUsingRC(event: Event, context: KeyedProcessFunction[String, Event, String]#Context)(implicit metrics: Metrics): Unit = {
+  def generateCourseCertificateUsingRC(event: Event, context: KeyedProcessFunction[String, Event, String]#Context)(implicit metrics: Metrics): Unit = {
+    logger.info(s"generateCourseCertificateUsingRC: Generating certificate for userId=${event.eData.getOrElse("userId", "")}, courseId=${event.related.getOrElse(config.COURSE_ID, "")}, batchId=${event.related.getOrElse(config.BATCH_ID, "")}")
     val certModelList: List[CertModel] = new CertMapper(certificateConfig).mapReqToCertModel(event)
     certModelList.foreach(certModel => {
       var uuid: String = null
       val reIssue: Boolean = event.oldId.nonEmpty
-      //if reissue then read rc for oldId and call rc delete api
       if(reIssue){
-        try {
-          callCertificateRc(config.rcDeleteApi, event.oldId, null)
-        } catch {
+        try { callCertificateRc(config.rcDeleteApi, event.oldId, null) } catch {
           case ex: ServerException =>
             logger.error("Rc deletion failed | old id is not present :: identifier " + event.oldId + " :: " + ex.getMessage)
-            //when record not present for oldId in rc registry, calls old registry deletion
             deleteOldRegistry(event.oldId)
-          case e: UnirestException =>
-            logger.error("Rc deletion failed due to connection :: identifier " + event.oldId + " :: " + e.getMessage)
+          case e: UnirestException => logger.error("Rc deletion failed due to connection :: identifier " + event.oldId + " :: " + e.getMessage)
         }
       }
+      logger.info(s"generateCourseCertificateUsingRC: Generating CertModel for userId=${certModel.identifier}, recipientName=${certModel.recipientName}, certificateName=${certModel.certificateName}")
       val related = event.related
       val certReq = generateRequest(event, certModel, reIssue)
-      //make api call to registry
       uuid = callCertificateRc(config.rcCreateApi, null, certReq)
+      logger.info(s"generateCourseCertificateUsingRC: Certificate RC created for userId=${certModel.identifier}, uuid=$uuid")
       val userEnrollmentData = UserEnrollmentData(related.getOrElse(config.BATCH_ID, "").asInstanceOf[String], certModel.identifier,
         related.getOrElse(config.COURSE_ID, "").asInstanceOf[String], event.courseName, event.templateId,
         Certificate(uuid, event.name, "", formatter.format(new Date()), event.svgTemplate, config.rcEntity))
+      logger.info(s"generateCourseCertificateUsingRC: Updating user enrollment table for userId=${certModel.identifier}, batchId=${related.getOrElse(config.BATCH_ID, "")}, courseId=${related.getOrElse(config.COURSE_ID, "")}")
       updateUserEnrollmentTable(event, userEnrollmentData, context)
       metrics.incCounter(config.successEventCount)
+      logger.info(s"generateCourseCertificateUsingRC: Certificate generation completed for userId=${certModel.identifier}, uuid=$uuid")
     })
+  }
+
+  @throws[Exception]
+  def generateActivityCertificate(event: Event, context: KeyedProcessFunction[String, Event, String]#Context)(implicit metrics: Metrics): Unit = {
+    logger.info(s"generateActivityCertificate: Generating certificate for userId=${event.eData.getOrElse("userId", "")}, activityType=${event.eData.getOrElse("activityType", "")}, activityName=${event.activityName}, batchId=${event.eData.getOrElse("batchId", "")}")
+    val certModelList: List[CertModel] = new CertMapper(certificateConfig).mapReqToCertModel(event)
+    val certificateGenerator = new CertificateGenerator
+    certModelList.foreach(certModel => {
+      var uuid: String = null
+      try {
+        logger.info(s"generateActivityCertificate: Generating CertModel for userId=${certModel.identifier}, recipientName=${certModel.recipientName}, certificateName=${certModel.certificateName}")
+        val certificateExtension: CertificateExtension = certificateGenerator.getCertificateExtension(certModel)
+        uuid = certificateGenerator.getUUID(certificateExtension)
+        logger.info(s"generateActivityCertificate: Generated UUID=$uuid for userId=${certModel.identifier}")
+        val qrMap = certificateGenerator.generateQrCode(uuid, directory, certificateConfig.basePath)
+        val encodedQrCode: String = encodeQrCode(qrMap.qrFile)
+        val printUri = SvgGenerator.generate(certificateExtension, encodedQrCode, event.svgTemplate)
+        certificateExtension.printUri = Option(printUri)
+        val jsonUrl = uploadJson(certificateExtension, directory.concat(uuid).concat(".json"), event.tag.concat("/"))
+        val addReq = Map[String, AnyRef](JsonKeys.REQUEST -> {Map[String, AnyRef](
+          JsonKeys.ID -> uuid, JsonKeys.JSON_URL -> certificateConfig.basePath.concat(jsonUrl),
+          JsonKeys.JSON_DATA -> certificateExtension, JsonKeys.ACCESS_CODE -> qrMap.accessCode,
+          JsonKeys.RECIPIENT_NAME -> certModel.recipientName, JsonKeys.RECIPIENT_ID -> certModel.identifier,
+          config.RELATED -> event.related
+        ) ++ {if (event.oldId.nonEmpty) Map[String, AnyRef](config.OLD_ID -> event.oldId) else Map[String, AnyRef]()}})
+        logger.info(s"generateActivityCertificate: Adding certificate to registry for userId=${certModel.identifier}, uuid=$uuid")
+        addCertToRegistry(event, addReq, context)(metrics)
+        val related = event.related
+        val userEnrollmentData = UserEnrollmentData(related.getOrElse(config.BATCH_ID, "").asInstanceOf[String], certModel.identifier,
+          "", // no courseId for activity context
+          if (StringUtils.isNotBlank(event.activityName)) event.activityName else event.courseName,
+          event.templateId,
+          Certificate(uuid, event.name, qrMap.accessCode, formatter.format(new Date()), "", ""),
+          activityId = Option(related.getOrElse(config.ACTIVITY_ID, "").asInstanceOf[String]),
+          activityType = Option(related.getOrElse(config.ACTIVITY_TYPE, "").asInstanceOf[String]),
+          activityName = Option(event.activityName)
+        )
+        logger.info(s"generateActivityCertificate: Updating user enrollment table for userId=${certModel.identifier}, batchId=${related.getOrElse(config.BATCH_ID, "")}, activityId=${related.getOrElse(config.ACTIVITY_ID, "")}, activityType=${related.getOrElse(config.ACTIVITY_TYPE, "")}")
+        updateUserEnrollmentTable(event, userEnrollmentData, context)
+        metrics.incCounter(config.successEventCount)
+        logger.info(s"generateActivityCertificate: Certificate generation completed for userId=${certModel.identifier}, uuid=$uuid")
+      } finally {
+        cleanUp(uuid, directory)
+      }
+    })
+  }
+
+  @throws[Exception]
+  def generateActivityCertificateUsingRC(event: Event, context: KeyedProcessFunction[String, Event, String]#Context)(implicit metrics: Metrics): Unit = {
+    logger.info(s"generateActivityCertificateUsingRC: Generating certificate for userId=${event.eData.getOrElse("userId", "")}, activityType=${event.eData.getOrElse("activityType", "")}, activityName=${event.activityName}, batchId=${event.eData.getOrElse("batchId", "")}")
+    val certModelList: List[CertModel] = new CertMapper(certificateConfig).mapReqToCertModel(event)
+    certModelList.foreach(certModel => {
+      var uuid: String = null
+      val reIssue: Boolean = event.oldId.nonEmpty
+      if(reIssue){
+        try { callCertificateRc(config.rcDeleteApi, event.oldId, null) } catch {
+          case ex: ServerException =>
+            logger.error("Rc deletion failed | old id is not present :: identifier " + event.oldId + " :: " + ex.getMessage)
+            deleteOldRegistry(event.oldId)
+          case e: UnirestException => logger.error("Rc deletion failed due to connection :: identifier " + event.oldId + " :: " + e.getMessage)
+        }
+      }
+      logger.info(s"generateActivityCertificateUsingRC: Generating CertModel for userId=${certModel.identifier}, recipientName=${certModel.recipientName}, certificateName=${certModel.certificateName}")
+      val related = event.related
+      val certReq = generateActivityRequest(event, certModel, reIssue)
+      uuid = callCertificateRc(config.rcCreateApi, null, certReq)
+      logger.info(s"generateActivityCertificateUsingRC: Certificate RC created for userId=${certModel.identifier}, uuid=$uuid")
+      val userEnrollmentData = UserEnrollmentData(related.getOrElse(config.BATCH_ID, "").asInstanceOf[String], certModel.identifier,
+        "",
+        if (StringUtils.isNotBlank(event.activityName)) event.activityName else event.courseName,
+        event.templateId,
+        Certificate(uuid, event.name, "", formatter.format(new Date()), event.svgTemplate, config.rcEntity),
+        activityId = Option(related.getOrElse(config.ACTIVITY_ID, "").asInstanceOf[String]),
+        activityType = Option(event.eData.getOrElse(config.ACTIVITY_TYPE, "").asInstanceOf[String]),
+        activityName = Option(event.activityName)
+      )
+      logger.info(s"generateActivityCertificateUsingRC: Updating user enrollment table for userId=${certModel.identifier}, batchId=${related.getOrElse(config.BATCH_ID, "")}, activityId=${related.getOrElse(config.ACTIVITY_ID, "")}, activityType=${related.getOrElse(config.ACTIVITY_TYPE, "")}")
+      updateUserEnrollmentTable(event, userEnrollmentData, context)
+      metrics.incCounter(config.successEventCount)
+      logger.info(s"generateActivityCertificateUsingRC: Certificate generation completed for userId=${certModel.identifier}, uuid=$uuid")
+    })
+  }
+
+  @throws[Exception]
+  def generateCertificateUsingRC(event: Event, context: KeyedProcessFunction[String, Event, String]#Context)(implicit metrics: Metrics): Unit = {
+    if (event.isActivity) generateActivityCertificateUsingRC(event, context)
+    else generateCourseCertificateUsingRC(event, context)
+  }
+
+  private def resolveActivityValForRequest(isActivity: Boolean, activityType: String, batchId: String, courseId: String): Option[String] = {
+    try {
+      if (!isActivity) {
+        if (StringUtils.isNotBlank(courseId) && StringUtils.containsIgnoreCase(batchId, courseId))
+          Option(getActivityValueFromEs(batchId)).filter(StringUtils.isNotBlank)
+        else None
+      } else {
+        if (StringUtils.equalsIgnoreCase(activityType, "Competency Level"))
+          Option(getActivityValueFromEs(batchId)).filter(StringUtils.isNotBlank)
+        else None
+      }
+    } catch {
+      case _: Throwable => None
+    }
+  }
+
+  def generateCourseRequest(event: Event, certModel: CertModel, reIssue: Boolean): Map[String, AnyRef] = {
+    val req = Map("filters" -> Map())
+    val batchId = event.related.getOrElse(config.BATCH_ID, "").asInstanceOf[String]
+    val courseId = event.related.getOrElse(config.COURSE_ID, "").asInstanceOf[String]
+    val publicKeyId: String = callCertificateRc(config.rcSearchApi, null, req)
+    val replacedUrl = if(event.svgTemplate.contains(config.cloudStoreBasePathPlaceholder)) event.svgTemplate.replace(config.cloudStoreBasePathPlaceholder, config.baseUrl+"/"+config.contentCloudStorageContainer) else event.svgTemplate
+    logger.info("generateCourseRequest: template url from event {}", event.svgTemplate)
+    logger.info("generateCourseRequest: template url after replacing placeholder {}", replacedUrl)
+
+    val trainingPayload = if (StringUtils.containsIgnoreCase(batchId, courseId)) {
+      val activityVal = resolveActivityValForRequest(isActivity = false, activityType = null, batchId = batchId, courseId = courseId)
+      Training(courseId, event.courseName, "Course", batchId, None, event.issuedDate, activity = activityVal)
+    } else {
+      val learnerProfile = Option.apply(getLearnerProfile(courseId, batchId))
+      Training(courseId, event.courseName, "Course", batchId, learnerProfile, event.issuedDate, activity = None)
+    }
+
+    val createCertReq = Map[String, AnyRef](
+      "certificateLabel" -> certModel.certificateName,
+      "status" -> "ACTIVE",
+      "templateUrl" -> replacedUrl,
+      "training" -> trainingPayload,
+      "recipient" -> Recipient(certModel.identifier, certModel.recipientName, null),
+      "issuer" -> Issuer(certModel.issuer.url, certModel.issuer.name, publicKeyId),
+      "signatory" -> event.signatoryList,
+    ) ++ {if (reIssue) Map[String, AnyRef](config.OLD_ID -> event.oldId) else Map[String, AnyRef]()}
+    createCertReq
+  }
+
+  def generateActivityRequest(event: Event, certModel: CertModel, reIssue: Boolean): Map[String, AnyRef] = {
+    val req = Map("filters" -> Map())
+    val batchId = event.related.getOrElse(config.BATCH_ID, "").asInstanceOf[String]
+    val activityId = event.related.getOrElse(config.ACTIVITY_ID, "").asInstanceOf[String]
+    val activityType = event.eData.getOrElse("activityType", "").asInstanceOf[String]
+    val displayName = if (StringUtils.isNotBlank(event.activityName)) event.activityName else event.courseName
+    val publicKeyId: String = callCertificateRc(config.rcSearchApi, null, req)
+    val replacedUrl = if(event.svgTemplate.contains(config.cloudStoreBasePathPlaceholder)) event.svgTemplate.replace(config.cloudStoreBasePathPlaceholder, config.baseUrl+"/"+config.contentCloudStorageContainer) else event.svgTemplate
+    logger.info("generateActivityRequest: template url from event {}", event.svgTemplate)
+    logger.info("generateActivityRequest: template url after replacing placeholder {}", replacedUrl)
+
+    val activityVal = resolveActivityValForRequest(isActivity = true, activityType = activityType, batchId = batchId, courseId = null)
+
+    val createCertReq = Map[String, AnyRef](
+      "certificateLabel" -> certModel.certificateName,
+      "status" -> "ACTIVE",
+      "templateUrl" -> replacedUrl,
+      "training" -> Training(activityId, displayName, activityType, batchId, None, event.issuedDate, activity = activityVal),
+      "recipient" -> Recipient(certModel.identifier, certModel.recipientName, null),
+      "issuer" -> Issuer(certModel.issuer.url, certModel.issuer.name, publicKeyId),
+      "signatory" -> event.signatoryList,
+    ) ++ {if (reIssue) Map[String, AnyRef](config.OLD_ID -> event.oldId) else Map[String, AnyRef]()}
+    createCertReq
   }
 
   def deleteOldRegistry(id: String): Unit = {
@@ -309,24 +480,9 @@ class CertificateGeneratorFunction(config: CertificateGeneratorConfig, httpUtil:
     storageService.uploadFile(cloudPath, file)
   }
 
+  // Deprecated by context-specific methods; kept for compatibility where used elsewhere
   def generateRequest(event: Event, certModel: CertModel, reIssue: Boolean):  Map[String, AnyRef] = {
-    val req = Map("filters" -> Map())
-    val batchId = event.related.getOrElse(config.BATCH_ID, "").asInstanceOf[String]
-    val courseId = event.related.getOrElse(config.COURSE_ID, "").asInstanceOf[String]
-    val publicKeyId: String = callCertificateRc(config.rcSearchApi, null, req)
-    val replacedUrl = if(event.svgTemplate.contains(config.cloudStoreBasePathPlaceholder)) event.svgTemplate.replace(config.cloudStoreBasePathPlaceholder, config.baseUrl+"/"+config.contentCloudStorageContainer) else event.svgTemplate
-    logger.info("generateRequest: template url from event {}", event.svgTemplate)
-    logger.info("generateRequest: template url after replacing placeholder {}", replacedUrl)
-    val createCertReq = Map[String, AnyRef](
-      "certificateLabel" -> certModel.certificateName,
-      "status" -> "ACTIVE",
-      "templateUrl" -> replacedUrl,
-      "training" -> Training(courseId, event.courseName, "Course", batchId, Option.apply(getLearnerProfile(courseId, batchId)), event.issuedDate),
-      "recipient" -> Recipient(certModel.identifier, certModel.recipientName, null),
-      "issuer" -> Issuer(certModel.issuer.url, certModel.issuer.name, publicKeyId),
-      "signatory" -> event.signatoryList,
-    ) ++ {if (reIssue) Map[String, AnyRef](config.OLD_ID -> event.oldId) else Map[String, AnyRef]()}
-    createCertReq
+    generateCourseRequest(event, certModel, reIssue)
   }
 
   @throws[ServerException]
@@ -397,13 +553,22 @@ class CertificateGeneratorFunction(config: CertificateGeneratorConfig, httpUtil:
   def updateUserEnrollmentTable(event: Event, certMetaData: UserEnrollmentData, context: KeyedProcessFunction[String, Event, String]#Context)(implicit metrics: Metrics): Unit = {
     logger.info("CertificateGeneratorFunction:: updateUserEnrollmentTable:: event:: ", event)
     logger.info("CertificateGeneratorFunction:: updateUserEnrollmentTable:: certMetaData:: ", certMetaData)
-    val primaryFields = Map(config.userId.toLowerCase() -> certMetaData.userId, config.batchId.toLowerCase -> certMetaData.batchId, config.courseId.toLowerCase -> certMetaData.courseId)
-    val records = getIssuedCertificatesFromUserEnrollmentTable(primaryFields)
+    val isActivity = event.isActivity
+    val primaryFields = if (!isActivity) {
+      Map(config.userId.toLowerCase() -> certMetaData.userId, config.batchId.toLowerCase -> certMetaData.batchId, config.courseId.toLowerCase -> certMetaData.courseId)
+    } else {
+      Map(config.userId.toLowerCase() -> certMetaData.userId,
+        config.batchId.toLowerCase -> certMetaData.batchId,
+        config.dbActivityId -> certMetaData.activityId.getOrElse(""),
+        config.dbActivityType -> certMetaData.activityType.getOrElse("")
+      )
+    }
+    val records = getIssuedCertificatesFromUserEnrollmentTable(primaryFields, isActivity)
     if (records.nonEmpty) {
       records.foreach((row: Row) => {
         val issuedOn = row.getTimestamp("completedOn")
         var certificatesList = row.getList(config.issued_certificates, TypeTokens.mapOf(classOf[String], classOf[String]))
-        if (null == certificatesList && certificatesList.isEmpty) {
+        if (certificatesList == null || certificatesList.isEmpty) {
           certificatesList = new util.ArrayList[util.Map[String, String]]()
         }
 
@@ -418,20 +583,26 @@ class CertificateGeneratorFunction(config: CertificateGeneratorConfig, httpUtil:
         else Map[String, String]()}
         ))
 
-        val query = getUpdateIssuedCertQuery(updatedCerts, certMetaData.userId, certMetaData.courseId, certMetaData.batchId, config)
+        val query = if (!isActivity)
+          getUpdateIssuedCertQuery(updatedCerts, certMetaData.userId, certMetaData.courseId, certMetaData.batchId, config)
+        else
+          getUpdateIssuedCertQueryForActivity(updatedCerts, certMetaData.userId, certMetaData.activityId.getOrElse(""), certMetaData.activityType.getOrElse(""), certMetaData.batchId, config)
+
         logger.info("CertificateGeneratorFunction:: updateUserEnrollmentTable:: update query:: ", query.toString)
         val result = cassandraUtil.update(query)
         logger.info("CertificateGeneratorFunction:: updateUserEnrollmentTable:: update result:: ", result)
         if (result) {
           logger.info("issued certificates in user-enrollment table  updated successfully")
           metrics.incCounter(config.dbUpdateCount)
-          val certificateAuditEvent = generateAuditEvent(certMetaData)
+          val certificateAuditEvent = generateAuditEvent(certMetaData, isActivity)
           logger.info("pushAuditEvent: audit event generated for certificate : " + certificateAuditEvent)
           val audit = ScalaJsonUtil.serialize(certificateAuditEvent)
           context.output(config.auditEventOutputTag, audit)
           logger.info("pushAuditEvent: certificate audit event success {}", audit)
-          context.output(config.notifierOutputTag, NotificationMetaData(certMetaData.userId, certMetaData.courseName, issuedOn, certMetaData.courseId, certMetaData.batchId, certMetaData.templateId, event.partition, event.offset))
-          context.output(config.userFeedOutputTag, UserFeedMetaData(certMetaData.userId, certMetaData.courseName, issuedOn, certMetaData.courseId, event.partition, event.offset))
+          val displayName = if (isActivity) certMetaData.activityName.getOrElse(certMetaData.courseName) else certMetaData.courseName
+          val entityId = if (isActivity) certMetaData.activityId.getOrElse("") else certMetaData.courseId
+          context.output(config.notifierOutputTag, NotificationMetaData(certMetaData.userId, displayName, issuedOn, entityId, certMetaData.batchId, certMetaData.templateId, event.partition, event.offset, isActivity))
+          context.output(config.userFeedOutputTag, UserFeedMetaData(certMetaData.userId, displayName, issuedOn, entityId, event.partition, event.offset))
         } else {
           metrics.incCounter(config.failedEventCount)
           throw new Exception(s"Update certificates to enrolments failed: $event")
@@ -453,11 +624,19 @@ class CertificateGeneratorFunction(config: CertificateGeneratorConfig, httpUtil:
     .and(QueryBuilder.eq(config.courseId.toLowerCase, courseId))
     .and(QueryBuilder.eq(config.batchId.toLowerCase, batchId))
 
+  def getUpdateIssuedCertQueryForActivity(updatedCerts: util.List[util.Map[String, String]], userId: String, activityId: String, activityType: String, batchId: String, config: CertificateGeneratorConfig):
+  Update.Where = QueryBuilder.update(config.activityDbKeyspace, config.activityDbEnrollmentTable).where()
+    .`with`(QueryBuilder.set(config.issued_certificates, updatedCerts))
+    .where(QueryBuilder.eq(config.userId.toLowerCase, userId))
+    .and(QueryBuilder.eq(config.dbActivityId, activityId))
+    .and(QueryBuilder.eq(config.dbActivityType, activityType))
+    .and(QueryBuilder.eq(config.batchId.toLowerCase, batchId))
 
-  private def getIssuedCertificatesFromUserEnrollmentTable(columns: Map[String, AnyRef])(implicit metrics: Metrics) = {
+
+  private def getIssuedCertificatesFromUserEnrollmentTable(columns: Map[String, AnyRef], isActivity: Boolean)(implicit metrics: Metrics) = {
     logger.info("primary columns {}", columns)
     val selectWhere = QueryBuilder.select().all()
-      .from(config.dbKeyspace, config.dbEnrollmentTable).
+      .from(if (isActivity) config.activityDbKeyspace else config.dbKeyspace, if (isActivity) config.activityDbEnrollmentTable else config.dbEnrollmentTable).
       where()
     columns.map(col => {
       col._2 match {
@@ -473,12 +652,43 @@ class CertificateGeneratorFunction(config: CertificateGeneratorConfig, httpUtil:
   }
 
 
-  private def generateAuditEvent(data: UserEnrollmentData): CertificateAuditEvent = {
+  private def generateAuditEvent(data: UserEnrollmentData, isActivity: Boolean = false): CertificateAuditEvent = {
+    val rollupId = if (isActivity) data.activityId.getOrElse(data.courseId) else data.courseId
+    val env = if (isActivity) "Activity" else "Course"
     CertificateAuditEvent(
       actor = Actor(id = data.userId),
-      context = EventContext(cdata = Array(Map("type" -> config.courseBatch, config.id -> data.batchId).asJava)),
-      `object` = EventObject(id = data.certificate.id, `type` = "Certificate", rollup = Map(config.l1 -> data.courseId).asJava))
+      context = EventContext(env = env, cdata = Array(Map("type" -> (if (isActivity) "ActivityBatch" else config.courseBatch), config.id -> data.batchId).asJava)),
+      `object` = EventObject(id = data.certificate.id, `type` = "Certificate", rollup = Map(config.l1 -> rollupId).asJava))
   }
 
+  private def getActivityValueFromEs(batchId: String): String = {
+    try {
+      val url = s"${config.activityEsBaseUrl}/${config.activityBatchIndex}/_search"
+      val payload = s"""{
+                    |  "_source": ["name"],
+                    |  "query": { "term": { "batchId.raw": "$batchId" } }
+                    |}""".stripMargin
+      logger.info(s"getActivityValueFromEs: POST $url payload $payload")
+      val response = httpUtil.post(url, payload, Map("Content-Type" -> "application/json"))
+      if (response.status == 200 && StringUtils.isNotBlank(response.body)) {
+        val respMap = gson.fromJson(response.body, classOf[java.util.Map[String, AnyRef]])
+        val hits = respMap.getOrDefault("hits", new java.util.HashMap[String, AnyRef]).asInstanceOf[java.util.Map[String, AnyRef]]
+        val innerHits = hits.getOrDefault("hits", new java.util.ArrayList[java.util.Map[String, AnyRef]]()).asInstanceOf[java.util.List[java.util.Map[String, AnyRef]]]
+        if (!innerHits.isEmpty) {
+          val first = innerHits.get(0)
+          val source = first.getOrDefault("_source", new java.util.HashMap[String, AnyRef]).asInstanceOf[java.util.Map[String, AnyRef]]
+          val name = Option(source.get("name")).map(_.asInstanceOf[String]).getOrElse("")
+          logger.info(s"getActivityValueFromEs: resolved activity value '$name' for batchId '$batchId'")
+          return name
+        }
+      } else {
+        logger.warn(s"getActivityValueFromEs: non-200 or empty body status=${response.status} body=${response.body}")
+      }
+    } catch {
+      case ex: Exception =>
+        logger.error(s"getActivityValueFromEs: failed to fetch activity value for batchId $batchId due to ${ex.getMessage}")
+    }
+    ""
+  }
 
 }

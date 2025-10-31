@@ -38,6 +38,9 @@ class CertificateGeneratorConfig(override val config: Config) extends BaseJobCon
   val certIndex: String = "certs"
   val certIndexType: String = "_doc"
 
+  val activityEsBaseUrl: String = if (config.hasPath("activity.es.basePath")) config.getString("activity.es.basePath") else "http://localhost:9200"
+  val activityBatchIndex: String = if (config.hasPath("activity.es.batch.index")) config.getString("activity.es.batch.index") else "activity-batch"
+
 
   // Cassandra Configurations
   val sbKeyspace: String = config.getString("lms-cassandra.sbkeyspace")
@@ -47,9 +50,16 @@ class CertificateGeneratorConfig(override val config: Config) extends BaseJobCon
   val dbHost: String = config.getString("lms-cassandra.host")
   val dbPort: Int = config.getInt("lms-cassandra.port")
   val dbCourseBatchTable: String = config.getString("lms-cassandra.course_batch.table")
+
+  val activityDbKeyspace: String = if(config.hasPath("activity-cassandra.keyspace")) config.getString("activity-cassandra.keyspace") else "sb_collection_tracking"
+  val activityDbEnrollmentTable: String = if(config.hasPath("activity-cassandra.user_enrolments.table")) config.getString("activity-cassandra.user_enrolments.table") else "user_enrolments"
+  val activityBatchesTable: String = if(config.hasPath("activity-cassandra.batches.table")) config.getString("activity-cassandra.batches.table") else "batches"
+
   val dbBatchId = "batchid"
   val dbCourseId = "courseid"
   val dbUserId = "userid"
+  val dbActivityId = "activityid"
+  val dbActivityType = "activitytype"
   val active: String = "active"
   val issuedCertificates: String = "issued_certificates"
 
@@ -110,6 +120,9 @@ class CertificateGeneratorConfig(override val config: Config) extends BaseJobCon
   val OLD_ID: String = "oldId"
   val BATCH_ID: String = "batchId"
   val COURSE_ID: String = "courseId"
+  val ACTIVITY_ID: String = "activityId"
+  val ACTIVITY_TYPE: String = "activityType"
+  val ACTIVITY_NAME: String = "activityName"
   val TEMPLATE_ID: String = "templateId"
   val USER_ID: String = "userId"
   val ISSUED_DATE: String = "issuedDate"
@@ -139,6 +152,7 @@ class CertificateGeneratorConfig(override val config: Config) extends BaseJobCon
   val certificate = "certificate"
   val action = "action"
   val courseName = "courseName"
+  val activityName = "activityName"
   val templateId = "templateId"
   val cert_templates = "cert_templates"
   val courseBatch = "CourseBatch"

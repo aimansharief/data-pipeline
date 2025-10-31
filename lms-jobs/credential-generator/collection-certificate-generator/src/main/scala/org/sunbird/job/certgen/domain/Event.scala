@@ -28,6 +28,8 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
 
   def courseName: String = readOrDefault[String]("edata.courseName", "")
 
+  def activityName: String = readOrDefault[String]("edata.activityName", "")
+
   def name: String = readOrDefault[String]("edata.name", "")
 
   def issuedDate: String = readOrDefault[String]("edata.issuedDate", "")
@@ -51,11 +53,17 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
   def certificateDescription: String = readOrDefault[String]("edata.description", "")
 
   def related: Map[String, AnyRef] = readOrDefault[Map[String, AnyRef]]("edata.related", Map[String, AnyRef]())
-  
-  def batchId: String = related.getOrElse("batchId", "").asInstanceOf[String]
 
-  def courseId: String = related.getOrElse("courseId", "").asInstanceOf[String]
+  def batchId: String = readOrDefault[String]("edata.related.batchId", "")
+
+  def activityId: String = readOrDefault[String]("edata.related.activityId", "")
   
+  def activityType: String = readOrDefault[String]("edata.activityType", "")
+
+  def courseId: String = readOrDefault[String]("edata.courseId", "")
+  
+  def isActivity: Boolean = activityId.nonEmpty && activityType.nonEmpty
+
   def userId: String = readOrDefault[String]("edata.userId", "")
 
 }

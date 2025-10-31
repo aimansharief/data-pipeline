@@ -46,7 +46,7 @@ class CertValidator() {
         else throw e
     }
     validateCriteria(event.criteria)
-    validateTagId(event.tag)
+    // validateTagId(event.tag)
     val basePath: String = event.basePath
     if (StringUtils.isNotBlank(basePath)) {
       validateBasePath(basePath)
@@ -178,19 +178,36 @@ class CertValidator() {
   }
   
   def isNotIssued(event: Event)(config: CertificateGeneratorConfig, metrics: Metrics, cassandraUtil: CassandraUtil):Boolean = {
-    val query = QueryBuilder.select( "issued_certificates").from(config.dbKeyspace, config.dbEnrollmentTable)
-      .where(QueryBuilder.eq(config.dbUserId, event.eData.getOrElse("userId", "")))
-      .and(QueryBuilder.eq(config.dbCourseId, event.related.getOrElse("courseId", "")))
-      .and(QueryBuilder.eq(config.dbBatchId, event.related.getOrElse("batchId", "")))
-    val row = cassandraUtil.findOne(query.toString)
+    val logger = LoggerFactory.getLogger(classOf[CertValidator])
+    val select = if (!event.isActivity) {
+      QueryBuilder.select("issued_certificates").from(config.dbKeyspace, config.dbEnrollmentTable)
+        .where(QueryBuilder.eq(config.dbUserId, event.eData.getOrElse("userId", "")))
+        .and(QueryBuilder.eq(config.dbCourseId, event.eData.getOrElse("courseId", "")))
+        .and(QueryBuilder.eq(config.dbBatchId, event.related.getOrElse("batchId", "")))
+    } else {
+      QueryBuilder.select("issued_certificates").from(config.activityDbKeyspace, config.activityDbEnrollmentTable)
+        .where(QueryBuilder.eq(config.dbUserId, event.eData.getOrElse("userId", "")))
+        .and(QueryBuilder.eq(config.dbActivityId, event.related.getOrElse("activityId", "")))
+        .and(QueryBuilder.eq(config.dbActivityType, event.eData.getOrElse("activityType", "")))
+        .and(QueryBuilder.eq(config.dbBatchId, event.related.getOrElse("batchId", "")))
+    }
+    logger.info(s"isNotIssued: Cassandra query: ${select}")
+    val row = cassandraUtil.findOne(select.toString)
+    logger.info(s"isNotIssued: Cassandra row: ${row}")
     metrics.incCounter(config.enrollmentDbReadCount)
     if (null != row) {
       val issuedCertificates = row
         .getList(config.issuedCertificates, TypeTokens.mapOf(classOf[String], classOf[String])).asScala.toList
-      val isCertIssued = !issuedCertificates.isEmpty && !issuedCertificates
-        .filter(cert => event.name.equalsIgnoreCase(cert.getOrDefault(config.name, "").asInstanceOf[String])).isEmpty
-      ((null != event.oldId && !event.oldId.isEmpty) || !isCertIssued)
-    } else false
+      logger.info(s"isNotIssued: issuedCertificates list: $issuedCertificates")
+      val isCertIssued = issuedCertificates.nonEmpty && issuedCertificates.exists(cert => event.name.equalsIgnoreCase(cert.getOrDefault(config.name, "").asInstanceOf[String]))
+      logger.info(s"isNotIssued: isCertIssued=$isCertIssued, event.oldId=${event.oldId}")
+      val result = (event.oldId != null && event.oldId.nonEmpty) || !isCertIssued
+      logger.info(s"isNotIssued: returning $result (true means not issued, false means already issued)")
+      result
+    } else {
+      logger.info("isNotIssued: No row found, returning false (already issued)")
+      false
+    }
   }
 
 }

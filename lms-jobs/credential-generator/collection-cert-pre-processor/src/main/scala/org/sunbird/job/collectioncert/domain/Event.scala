@@ -13,6 +13,8 @@ class Event(eventMap: java.util.Map[String, Any], partition: Int, offset: Long) 
 
     def activityId: String = readOrDefault[String]("edata.activityId", "")
 
+    def activityType: String = readOrDefault[String]("edata.activityType", "")
+
     def userId: String = {
         val list = readOrDefault[List[String]]("edata.userIds", List[String]())
         if(list.isEmpty) "" else list.head
