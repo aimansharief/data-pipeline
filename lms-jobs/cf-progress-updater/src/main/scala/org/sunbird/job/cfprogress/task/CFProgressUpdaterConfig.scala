@@ -18,6 +18,7 @@ class CFProgressUpdaterConfig(override val config: Config) extends BaseJobConfig
   // Kafka Topics Configuration
   val kafkaInputTopic: String = config.getString("kafka.input.topic")
   val kafkaAuditEventTopic: String = if (config.hasPath("kafka.output.audit.topic")) config.getString("kafka.output.audit.topic") else "dev.cf.progress.audit"
+  val certIssueTopic: String = config.getString("kafka.output.certissue.topic")
   override val kafkaConsumerParallelism: Int = config.getInt("task.consumer.parallelism")
 
   // Metric List

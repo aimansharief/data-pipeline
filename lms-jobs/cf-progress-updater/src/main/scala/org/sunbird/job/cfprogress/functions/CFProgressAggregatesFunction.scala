@@ -81,6 +81,8 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
                     // Update the parent progress in the database
                     updateParentProgress(parentProgressList, metrics)
 
+                    // Generate certificate issue event for completed parent activities
+                    createActivityCertIssueEvent(parentProgressList, event, context)(metrics)
                     //Generate AUDIT event for all the Activity completion and side-output to Kafka (gated by config)
                     if (config.activityProgressAuditEnabled) {
                         generateActivityCompletionAuditEvent(parentProgressList, event, context)(metrics)
@@ -341,6 +343,25 @@ class CFProgressAggregatesFunction(config: CFProgressUpdaterConfig, @transient v
             )
             logger.info("audit event =>"+gson.toJson(auditEvent))
             context.output(config.auditEventOutputTag, gson.toJson(auditEvent))
+        }
+    }
+
+    /**
+     * Generate certificate issue event for completed parent activities
+     */
+    private def createActivityCertIssueEvent(parentProgressList: List[Map[String, AnyRef]], sourceEvent: Event, context: ProcessFunction[Event, String]#Context)(metrics: Metrics): Unit = {
+        val completed = parentProgressList.filter(m => m.contains("completedon"))
+        completed.foreach { m =>
+            val userId = m("userid").toString
+            val activityId = m("activityid").toString
+            val activityType = m("activitytype").toString
+            val batchId = m("batchid").toString
+            val ets = System.currentTimeMillis
+            val mid = s"CF.${ets}.${java.util.UUID.randomUUID}"
+            val eventJson = s"""{"eid": "BE_JOB_REQUEST","ets": $ets,"mid": "$mid","actor": {"id": "CF Certificate Generator","type": "System"},"context": {"pdata": {"ver": "1.0","id": "org.sunbird.platform"}},"object": {"id": "$batchId-$activityId","type": "CFActivityCertificateGeneration"},"edata": {"userIds": ["$userId"],"action": "issue-certificate","iteration": 1, "trigger": "auto-issue","batchId": "$batchId","reIssue": false,"activityId": "$activityId","activityType": "$activityType"}}"""
+            logger.info("CF Cert Issue Event: " + eventJson)
+            // Use OutputTag from config for cert issue events
+            context.output(config.certIssueEventOutputTag, eventJson)
         }
     }
 

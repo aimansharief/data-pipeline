@@ -31,6 +31,9 @@ class CFProgressUpdaterStreamTask(config: CFProgressUpdaterConfig, kafkaConnecto
     // Side output: audit events -> Kafka string sink
     processed.getSideOutput(config.auditEventOutputTag).addSink(kafkaConnector.kafkaStringSink(config.kafkaAuditEventTopic))
 
+    // Side output: certificate issue events -> Kafka string sink
+    processed.getSideOutput(config.certIssueEventOutputTag).addSink(kafkaConnector.kafkaStringSink(config.certIssueTopic))
+
     env.execute(config.jobName)
   }
 }
